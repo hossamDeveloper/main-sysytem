@@ -15,3 +15,4 @@ export function EmployeesAndSalaries({ activeSubModule = 'employees' }) {
   return <ModuleComponent />;
 }
 
+

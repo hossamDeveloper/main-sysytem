@@ -318,9 +318,9 @@ export function Loans() {
           issuedDate: String(rawIssuedDate),
           repaymentType: item.repaymentType || item['repaymentType'] || 'يدوي',
           installments: parseInt(item.installments || item['installments'] || 0),
-          installmentAmount: parseNumber(item.installmentAmount || item['installmentAmount'] || 0),
+          installmentAmount: parseNumber(item.installmentAmount ?? item['installmentAmount'] ?? 0),
           remainingAmount: parseNumber(
-            item.remainingAmount || item['remainingAmount'] || rawAmount
+            item.remainingAmount ?? item['remainingAmount'] ?? rawAmount
           ),
           schedule,
           notes: item.notes || item['notes'] || '',
@@ -405,6 +405,7 @@ export function Loans() {
         }}
         title={editingItem ? 'تعديل سلفة' : 'إصدار سلفة جديدة'}
         size="lg"
+        zIndexClass="z-[10000]"
       >
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
@@ -595,7 +596,7 @@ function PaymentModal({ isOpen, onClose, onConfirm, loan }) {
   if (!loan) return null;
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="تسجيل سداد" size="sm">
+    <Modal isOpen={isOpen} onClose={onClose} title="تسجيل سداد" size="sm" zIndexClass="z-[10000]">
       <div className="space-y-4">
         <div>
           <p className="text-gray-700 mb-2">
@@ -693,7 +694,7 @@ function ViewModal({ isOpen, onClose, loanGroup, getEmployeeName, onPay, onEdit,
                           {onPay && (
                             <button
                               onClick={() => onPay(loan)}
-                              className="px-3 py-1 bg-amber-500 text-white rounded-lg hover:bg-amber-600 text-xs"
+                              className="min-w-[70px] px-3 py-1 bg-amber-500 text-white rounded-lg hover:bg-amber-600 text-xs"
                             >
                               سداد
                             </button>
@@ -701,7 +702,7 @@ function ViewModal({ isOpen, onClose, loanGroup, getEmployeeName, onPay, onEdit,
                           {onEdit && (
                             <button
                               onClick={() => onEdit(loan)}
-                              className="px-3 py-1 bg-sky-600 text-white rounded-lg hover:bg-sky-700 text-xs"
+                              className="min-w-[70px] px-3 py-1 bg-sky-600 text-white rounded-lg hover:bg-sky-700 text-xs"
                             >
                               تعديل
                             </button>
@@ -709,7 +710,7 @@ function ViewModal({ isOpen, onClose, loanGroup, getEmployeeName, onPay, onEdit,
                           {onDelete && (
                             <button
                               onClick={() => onDelete(loan)}
-                              className="px-3 py-1 bg-rose-600 text-white rounded-lg hover:bg-rose-700 text-xs"
+                              className="min-w-[70px] px-3 py-1 bg-rose-600 text-white rounded-lg hover:bg-rose-700 text-xs"
                             >
                               حذف
                             </button>

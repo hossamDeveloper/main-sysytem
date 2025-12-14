@@ -5,6 +5,7 @@ import { DataTable } from "../../components/DataTable";
 import { Modal } from "../../components/Modal";
 import { ConfirmModal } from "../../components/ConfirmModal";
 import { Toast } from "../../components/Toast";
+import logoImage from "../../assets/logo.png";
 
 export function Payslips() {
   const {
@@ -751,19 +752,82 @@ export function Payslips() {
     }
   };
 
-  const handlePrint = (item) => {
-    const printWindow = window.open("", "_blank");
+  const imageToBase64 = (src) => {
+    return new Promise((resolve) => {
+      // استخدام fetch لتحميل الصورة وتحويلها إلى base64
+      fetch(src)
+        .then((res) => res.blob())
+        .then((blob) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result);
+          reader.onerror = () => {
+            // في حالة الفشل، جرب استخدام Image
+            const img = new Image();
+            img.onload = () => {
+              try {
+                const canvas = document.createElement("canvas");
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext("2d");
+                ctx.drawImage(img, 0, 0);
+                resolve(canvas.toDataURL("image/png"));
+              } catch (error) {
+                resolve("");
+              }
+            };
+            img.onerror = () => resolve("");
+            img.src = src;
+          };
+          reader.readAsDataURL(blob);
+        })
+        .catch(() => {
+          // في حالة الفشل، جرب استخدام Image
+          const img = new Image();
+          img.onload = () => {
+            try {
+              const canvas = document.createElement("canvas");
+              canvas.width = img.width;
+              canvas.height = img.height;
+              const ctx = canvas.getContext("2d");
+              ctx.drawImage(img, 0, 0);
+              resolve(canvas.toDataURL("image/png"));
+            } catch (error) {
+              resolve("");
+            }
+          };
+          img.onerror = () => resolve("");
+          img.src = src;
+        });
+    });
+  };
+
+  const handlePrint = async (item) => {
+   const printWindow = window.open("", "_blank");
     const employee = employees.find(
       (emp) => emp.employeeId === item.employeeId
     );
+
+    const logoBase64 = await imageToBase64(logoImage);
+    const now = new Date();
+    const dateTime = now.toLocaleString("ar-EG", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
 
     printWindow.document.write(`
       <html dir="rtl">
         <head>
           <title>كشف راتب - ${item.payslipId}</title>
         <style>
-          body { font-family: Arial, sans-serif; padding: 20px; }
-          h1 { text-align: center; }
+          body { font-family: Arial, sans-serif; padding: 20px; position: relative; }
+          .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+          .date-time { font-size: 14px; color: #333; }
+          .logo { max-width: 150px; max-height: 80px; object-fit: contain; }
+          .header { text-align: center; margin-bottom: 20px; }
+          h1 { text-align: center; margin: 0; }
           table { width: 100%; border-collapse: collapse; margin: 20px 0; }
           th, td { border: 1px solid #000; padding: 8px; text-align: right; }
           th { background-color: #f2f2f2; }
@@ -773,7 +837,13 @@ export function Payslips() {
         </style>
         </head>
         <body>
-          <h1>كشف راتب</h1>
+          <div class="top-bar">
+            <div class="date-time">${dateTime}</div>
+            ${logoBase64 ? `<img src="${logoBase64}" alt="Logo" class="logo" />` : "<div></div>"}
+          </div>
+          <div class="header">
+            <h1>كشف راتب</h1>
+          </div>
           <p><strong>معرف الكشف:</strong> ${item.payslipId}</p>
           <p><strong>الموظف:</strong> ${
             employee ? employee.name : item.employeeId
@@ -845,7 +915,7 @@ export function Payslips() {
     printWindow.print();
   };
 
-  const handlePrintAllMonthly = () => {
+  const handlePrintAllMonthly = async () => {
     const list = filteredPayslips;
     if (!list || list.length === 0) {
       showToast("لا توجد كشوف في الشهر المحدد", "error");
@@ -908,14 +978,28 @@ export function Payslips() {
       `;
     });
 
+    const logoBase64 = await imageToBase64(logoImage);
+    const now = new Date();
+    const dateTime = now.toLocaleString("ar-EG", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
     const printWindow = window.open("", "_blank");
     printWindow.document.write(`
       <html dir="rtl">
         <head>
           <title>كشوف الرواتب - ${selectedMonth || "الكل"}</title>
           <style>
-            body { font-family: Arial, sans-serif; padding: 20px; }
-            h1 { text-align: center; margin-bottom: 20px; }
+            body { font-family: Arial, sans-serif; padding: 20px; position: relative; }
+            .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+            .date-time { font-size: 14px; color: #333; }
+            .logo { max-width: 150px; max-height: 80px; object-fit: contain; }
+            .header { text-align: center; margin-bottom: 20px; }
+            h1 { text-align: center; margin: 0; }
             table { width: 100%; border-collapse: collapse; margin: 20px 0; }
             th, td { border: 1px solid #000; padding: 8px; text-align: right; }
             th { background-color: #f2f2f2; }
@@ -925,7 +1009,13 @@ export function Payslips() {
           </style>
         </head>
         <body>
-          <h1>كشوف الرواتب - ${selectedMonth || "كل الشهور"}</h1>
+          <div class="top-bar">
+            <div class="date-time">${dateTime}</div>
+            ${logoBase64 ? `<img src="${logoBase64}" alt="Logo" class="logo" />` : "<div></div>"}
+          </div>
+          <div class="header">
+            <h1>كشوف الرواتب - ${selectedMonth || "كل الشهور"}</h1>
+          </div>
           <table>
             <thead>
               <tr>

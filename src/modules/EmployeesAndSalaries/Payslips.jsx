@@ -25,13 +25,7 @@ export function Payslips() {
   const [viewingItem, setViewingItem] = useState(null);
   const [itemToDelete, setItemToDelete] = useState(null);
   const [toast, setToast] = useState(null);
-  const [selectedMonth, setSelectedMonth] = useState(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
-      2,
-      "0"
-    )}`;
-  });
+  const [selectedMonth, setSelectedMonth] = useState("");
   const [formData, setFormData] = useState({
     payslipId: "",
     employeeId: "",

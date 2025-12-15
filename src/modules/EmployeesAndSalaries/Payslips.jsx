@@ -802,7 +802,7 @@ export function Payslips() {
   };
 
   const handlePrint = async (item) => {
-   const printWindow = window.open("", "_blank");
+    const printWindow = window.open("", "_blank");
     const employee = employees.find(
       (emp) => emp.employeeId === item.employeeId
     );
@@ -828,9 +828,11 @@ export function Payslips() {
           .logo { max-width: 150px; max-height: 80px; object-fit: contain; }
           .header { text-align: center; margin-bottom: 20px; }
           h1 { text-align: center; margin: 0; }
-          table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-          th, td { border: 1px solid #000; padding: 8px; text-align: right; }
-          th { background-color: #f2f2f2; }
+          .metrics-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin: 20px 0; }
+          .metric { padding: 10px; border: 1px solid #000; border-radius: 6px; background: #f9f9f9; }
+          .netpay-table { width: 100%; margin: 16px auto; border-collapse: collapse; }
+          .netpay-table th, .netpay-table td { border: 1px solid #000; padding: 10px; text-align: center; font-size: 16px; }
+          .netpay-table th { background-color: #f2f2f2; }
           .signatures { display: flex; justify-content: space-between; margin-top: 40px; gap: 40px; }
           .signature-block { width: 220px; text-align: center; }
           .signature-line { margin-top: 40px; border-top: 2px solid #000; width: 100%; }
@@ -844,58 +846,90 @@ export function Payslips() {
           <div class="header">
             <h1>كشف راتب</h1>
           </div>
-          <p><strong>معرف الكشف:</strong> ${item.payslipId}</p>
-          <p><strong>الموظف:</strong> ${
-            employee ? employee.name : item.employeeId
-          }</p>
-          <p><strong>الفترة:</strong> ${item.periodStart} إلى ${
-      item.periodEnd
-    }</p>
-          <table>
-            <tr><th>المرتب الأساسي</th><td>${item.basicSalary} ج.م</td></tr>
-            <tr><th>البدلات</th><td>${item.allowances || 0} ج.م</td></tr>
+       
+          <div style="display: flex; justify-content: space-between; gap: 16px; margin: 8px 0;">
+            <p style="margin: 0;"><strong>الموظف:</strong> ${
+              employee ? employee.name : item.employeeId
+            }</p>
+            <p style="margin: 0;"><strong>الفترة:</strong> ${item.periodStart} إلى ${
+        item.periodEnd
+      }</p>
+          </div>
+       
+
+          <div class="metrics-grid">
+            <div class="metric"><strong>المرتب الأساسي:</strong> ${item.basicSalary} ج.م</div>
+            <div class="metric"><strong>البدلات:</strong> ${item.allowances || 0} ج.م</div>
             ${
               item.overtimeHours > 0
-                ? `<tr><th>الساعات الإضافية</th><td>${item.overtimeHours} × ${
+                ? `<div class="metric"><strong>الساعات الإضافية:</strong> ${item.overtimeHours} × ${
                     item.overtimeRate || 0
                   } = ${(item.overtimeHours * (item.overtimeRate || 0)).toFixed(
                     2
-                  )} ج.م</td></tr>`
+                  )} ج.م</div>`
                 : ""
             }
             ${
               item.rewards > 0
-                ? `<tr><th>مكافآت</th><td>${item.rewards} ج.م</td></tr>`
+                ? `<div class="metric"><strong>مكافآت:</strong> ${item.rewards} ج.م</div>`
                 : ""
             }
-            <tr><th>الخصومات (أقساط السلف + غياب)</th><td>${item.deductions
+            <div class="metric"><strong>الخصومات (أقساط السلف + غياب):</strong> ${item.deductions
               .reduce((sum, d) => sum + parseFloat(d.amount || 0), 0)
-              .toFixed(2)} ج.م</td></tr>
+              .toFixed(2)} ج.م</div>
             ${
               item.penalties > 0
-                ? `<tr><th>جزاءات</th><td>${item.penalties} ج.م</td></tr>`
+                ? `<div class="metric"><strong>جزاءات:</strong> ${item.penalties} ج.م</div>`
                 : ""
             }
             ${
               item.insurance > 0
-                ? `<tr><th>تأمين</th><td>${item.insurance} ج.م</td></tr>`
+                ? `<div class="metric"><strong>تأمين:</strong> ${item.insurance} ج.م</div>`
                 : ""
             }
-            <tr><th>الصافي</th><td><strong>${item.netPay} ج.م</strong></td></tr>
+          </div>
+          <table class="netpay-table">
+            <thead>
+              <tr>
+                <th>الصافي</th>
+                <td><strong>${item.netPay} ج.م</strong></td>
+              </tr>
+            </thead>
           </table>
           ${
             item.deductions.length > 0
-              ? `
-            <h3>تفاصيل الخصومات:</h3>
-            <table>
-              <tr><th>النوع</th><th>المبلغ</th></tr>
-              ${item.deductions
-                .map(
-                  (d) => `<tr><td>${d.type}</td><td>${d.amount} ج.م</td></tr>`
-                )
-                .join("")}
-            </table>
-          `
+              ? (() => {
+                  const absentDaysForPeriod = getAbsentDays(
+                    item.employeeId,
+                    item.periodStart,
+                    item.periodEnd
+                  );
+                  return `
+                  <h3>تفاصيل الخصومات:</h3>
+                  <table style="width: 100%; border-collapse: collapse; margin-top: 8px;">
+                    <thead>
+                      <tr>
+                        <th style="text-align:center; border: 1px solid #000; padding: 6px;">النوع</th>
+                        <th style="text-align:center; border: 1px solid #000; padding: 6px;">المبلغ</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${item.deductions
+                        .map((d) => {
+                          const absentInfo =
+                            (d.type || "").includes("غياب") && absentDaysForPeriod > 0
+                              ? ` (أيام الغياب: ${absentDaysForPeriod})`
+                              : "";
+                          return `<tr>
+                            <td style="text-align:center; border: 1px solid #000; padding: 6px;">${d.type}${absentInfo}</td>
+                            <td style="text-align:center; border: 1px solid #000; padding: 6px;">${parseFloat(d.amount || 0).toFixed(2)} ج.م</td>
+                          </tr>`;
+                        })
+                        .join("")}
+                    </tbody>
+                  </table>
+                `;
+                })()
               : ""
           }
           <div class="signatures">

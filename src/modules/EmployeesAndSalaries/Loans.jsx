@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useERPStorage } from '../../hooks/useERPStorage';
-import { exportToExcel, importFromExcel } from '../../utils/excelUtils';
+import { exportToExcel, importFromExcel, exportWorkbook } from '../../utils/excelUtils';
 import { DataTable } from '../../components/DataTable';
 import { Modal } from '../../components/Modal';
 import { ConfirmModal } from '../../components/ConfirmModal';
@@ -253,32 +253,86 @@ export function Loans() {
     }
   };
 
-  const handleExport = () => {
-    if (loansData.length === 0) {
-      showToast('لا توجد بيانات للتصدير', 'error');
-      return;
-    }
-    const exportData = loansData.map((loan) => {
-      const scheduleArr = loan.schedule || [];
+  const buildLoanDetails = () =>
+    loansData.map((loan) => {
+      const scheduleArr = (loan.schedule || []).map((s) => ({
+        ...s,
+        amount: parseNumber(s.amount),
+      }));
       const unpaidTotal = scheduleArr.reduce(
-        (sum, s) => sum + (s.paid ? 0 : parseFloat(s.amount || 0)),
+        (sum, s) => sum + (s.paid ? 0 : parseNumber(s.amount)),
         0
       );
+      // المتبقي يُحسب دائماً من الأقساط غير المسددة لضمان أحدث قيمة
+      const remaining = unpaidTotal;
+
       return {
         loanId: loan.loanId,
         employeeId: loan.employeeId,
         employeeName: getEmployeeName(loan.employeeId),
-        amount: Number(loan.amount || 0),
-        remainingAmount:
-          loan.remainingAmount !== undefined ? Number(loan.remainingAmount) : Number(unpaidTotal),
+        amount: parseNumber(loan.amount),
+        remainingAmount: Number.isFinite(remaining) ? remaining : 0,
         issuedDate: loan.issuedDate || '',
         repaymentType: loan.repaymentType || '',
         notes: loan.notes || '',
         scheduleJson: JSON.stringify(scheduleArr),
       };
     });
-    exportToExcel(exportData, 'loans', 'erp_export_loans.xlsx');
-    showToast('تم تصدير البيانات بنجاح');
+
+  const detailsHeader = [
+    'loanId',
+    'employeeId',
+    'employeeName',
+    'amount',
+    'remainingAmount',
+    'issuedDate',
+    'repaymentType',
+    'notes',
+    'scheduleJson',
+  ];
+
+  const buildLoanSummary = () =>
+    groupedLoans.map((g) => ({
+      employeeId: g.employeeId,
+      employeeName: getEmployeeName(g.employeeId),
+      loansCount: g.loansCount,
+      totalAmount: Number(g.totalAmount || 0),
+      totalRemaining: Number(g.totalRemaining || 0),
+      lastIssuedDate: g.lastIssuedDate || '',
+    }));
+
+  const summaryHeader = [
+    'employeeId',
+    'employeeName',
+    'loansCount',
+    'totalAmount',
+    'totalRemaining',
+    'lastIssuedDate',
+  ];
+
+  const handleExport = () => {
+    if (loansData.length === 0) {
+      showToast('لا توجد بيانات للتصدير', 'error');
+      return;
+    }
+    // ملف واحد يحتوي ملخص وتجميع + التفاصيل الكاملة
+    // ضع شيت التفاصيل أولاً (حتى يتمكن الاستيراد من قراءة الشيت الأول مباشرة)
+    exportWorkbook(
+      [
+        {
+          data: buildLoanDetails(),
+          sheetName: 'loans',
+          header: detailsHeader,
+        },
+        {
+          data: buildLoanSummary(),
+          sheetName: 'loans_summary',
+          header: summaryHeader,
+        },
+      ],
+      'erp_export_loans.xlsx'
+    );
+    showToast('تم تصدير الملخص والتفاصيل بنجاح');
   };
 
   const parseNumber = (val) => {
@@ -786,7 +840,8 @@ function ImportModal({ isOpen, onClose, onImport }) {
     importFromExcel(
       file,
       (data) => onImport(data, mode),
-      (error) => console.error('Import error:', error)
+      (error) => console.error('Import error:', error),
+      'loans' // نقرأ شيت التفاصيل مباشرة
     );
   };
 

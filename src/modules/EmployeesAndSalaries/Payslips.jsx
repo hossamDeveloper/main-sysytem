@@ -976,10 +976,6 @@ export function Payslips() {
       const employee = employees.find(
         (emp) => emp.employeeId === item.employeeId
       );
-      const deductionsTotal = item.deductions.reduce(
-        (sum, d) => sum + parseFloat(d.amount || 0),
-        0
-      );
       const loanDeductions = item.deductions
         .filter((d) => d.source === "erp_loans")
         .reduce((sum, d) => sum + parseFloat(d.amount || 0), 0);
@@ -999,7 +995,6 @@ export function Payslips() {
           <td>${overtimePay.toFixed(2)}</td>
           <td>${item.rewards || 0}</td>
           <td>${loanDeductions.toFixed(2)}</td>
-          <td>${deductionsTotal.toFixed(2)}</td>
           <td>${item.penalties || 0}</td>
           <td>${item.insurance || 0}</td>
           <td>${getAbsentDays(
@@ -1059,7 +1054,6 @@ export function Payslips() {
                 <th>إضافي</th>
                 <th>مكافآت</th>
                 <th>سلف</th>
-                <th>خصومات</th>
                 <th>جزاءات</th>
                 <th>تأمين</th>
                 <th>أيام الغياب</th>
@@ -1074,7 +1068,7 @@ export function Payslips() {
           <table>
           <tfoot>
           <tr>
-          <th colspan="10" style="text-align:center">اجمالي الصافي</th>
+          <th colspan="9" style="text-align:center">اجمالي الصافي</th>
           <th style="text-align:center">${totalNet.toFixed(2)} ج.م</th>
           </tr>
           </tfoot>

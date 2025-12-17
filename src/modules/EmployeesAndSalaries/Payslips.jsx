@@ -971,6 +971,37 @@ export function Payslips() {
       (sum, item) => sum + (parseFloat(item.netPay) || 0),
       0
     );
+    const totals = perEmployeeList.reduce(
+      (acc, item) => {
+        const basic = parseFloat(item.basicSalary || 0);
+        const allow = parseFloat(item.allowances || 0);
+        const overtimePay =
+          (parseFloat(item.overtimeHours || 0) || 0) *
+          (parseFloat(item.overtimeRate || 0) || 0);
+        const rewards = parseFloat(item.rewards || 0);
+        const fridayDays = getFridayAttendanceDays(
+          item.employeeId,
+          item.periodStart,
+          item.periodEnd
+        );
+        const fridayBonus = ((basic + allow) / 30) * fridayDays;
+        const loanDeductions = item.deductions
+          .filter((d) => d.source === "erp_loans")
+          .reduce((sum, d) => sum + parseFloat(d.amount || 0), 0);
+        const absenceDeductions = item.deductions
+          .filter((d) => (d.type || "").includes("غياب"))
+          .reduce((sum, d) => sum + parseFloat(d.amount || 0), 0);
+        const penalties = parseFloat(item.penalties || 0);
+        const insurance = parseFloat(item.insurance || 0);
+
+        acc.totalLoans += loanDeductions;
+        acc.totalBaseAllow += basic + allow;
+        acc.totalRewards += rewards + fridayBonus + overtimePay;
+        acc.totalDeductions += absenceDeductions + penalties + insurance;
+        return acc;
+      },
+      { totalLoans: 0, totalBaseAllow: 0, totalRewards: 0, totalDeductions: 0 }
+    );
 
     const rows = perEmployeeList.map((item) => {
       const employee = employees.find(
@@ -1068,6 +1099,23 @@ export function Payslips() {
           <table>
           <tfoot>
           <tr>
+          <th colspan="9" style="text-align:center">اجمالي المرتبات (أساسي + بدلات)</th>
+          <th style="text-align:center">${totals.totalBaseAllow.toFixed(2)} ج.م</th>
+          </tr>
+          <tr>
+          <th colspan="9" style="text-align:center">اجمالي المكافآت (مكافآت + جمعة + إضافي)</th>
+          <th style="text-align:center">${totals.totalRewards.toFixed(2)} ج.م</th>
+          </tr>
+          <tr>
+          <th colspan="9" style="text-align:center">اجمالي السلف</th>
+          <th style="text-align:center">${totals.totalLoans.toFixed(2)} ج.م</th>
+          </tr>
+         
+          <tr>
+          <th colspan="9" style="text-align:center">اجمالي الخصومات (غياب + جزاءات + تأمين)</th>
+          <th style="text-align:center">${totals.totalDeductions.toFixed(2)} ج.م</th>
+          </tr>
+           <tr>
           <th colspan="9" style="text-align:center">اجمالي الصافي</th>
           <th style="text-align:center">${totalNet.toFixed(2)} ج.م</th>
           </tr>

@@ -74,6 +74,22 @@ export function Loans() {
     return Object.values(map);
   }, [loansData]);
 
+  // حساب إجمالي السلف للشهر الحالي
+  const currentMonthTotal = useMemo(() => {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = String(now.getMonth() + 1).padStart(2, '0');
+    const currentMonthStr = `${currentYear}-${currentMonth}`;
+
+    return loansData
+      .filter((loan) => {
+        if (!loan.issuedDate) return false;
+        const loanMonth = loan.issuedDate.slice(0, 7); // YYYY-MM
+        return loanMonth === currentMonthStr;
+      })
+      .reduce((sum, loan) => sum + parseFloat(loan.amount || 0), 0);
+  }, [loansData]);
+
   useEffect(() => {
     if (!viewingItem) return;
     const updatedGroup = groupedLoans.find((g) => g.employeeId === viewingItem.employeeId);
@@ -418,7 +434,12 @@ export function Loans() {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <h2 className="text-3xl font-bold text-gray-800">قسم السلف</h2>
+        <div>
+          <h2 className="text-3xl font-bold text-gray-800">قسم السلف</h2>
+          <p className="text-sm text-gray-600 mt-1">
+            إجمالي السلف للشهر الحالي: <span className="font-semibold text-emerald-600">{currentMonthTotal.toFixed(2)} ج.م</span>
+          </p>
+        </div>
         <div className="flex gap-3">
           <button
             onClick={handleExport}

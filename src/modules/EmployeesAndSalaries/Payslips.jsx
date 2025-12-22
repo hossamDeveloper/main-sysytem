@@ -27,6 +27,9 @@ export function Payslips() {
   const [itemToDelete, setItemToDelete] = useState(null);
   const [toast, setToast] = useState(null);
   const [selectedMonth, setSelectedMonth] = useState("");
+  const [isPrintSelectionModalOpen, setIsPrintSelectionModalOpen] = useState(false);
+  const [selectedEmployeesForPrint, setSelectedEmployeesForPrint] = useState([]);
+  const [selectedLocation, setSelectedLocation] = useState("المكتب");
   const [formData, setFormData] = useState({
     payslipId: "",
     employeeId: "",
@@ -859,7 +862,7 @@ export function Payslips() {
 
           <div class="metrics-grid">
             <div class="metric"><strong>المرتب الأساسي:</strong> ${item.basicSalary} ج.م</div>
-            <div class="metric"><strong>البدلات:</strong> ${item.allowances || 0} ج.م</div>
+            <div class="metric"><strong>الحوافز:</strong> ${item.allowances || 0} ج.م</div>
             ${
               item.overtimeHours > 0
                 ? `<div class="metric"><strong>الساعات الإضافية:</strong> ${item.overtimeHours} × ${
@@ -949,7 +952,7 @@ export function Payslips() {
     printWindow.print();
   };
 
-  const handlePrintAllMonthly = async () => {
+  const handlePrintAllMonthly = async (selectedEmployeeIds = null, location = "") => {
     const list = filteredPayslips;
     if (!list || list.length === 0) {
       showToast("لا توجد كشوف في الشهر المحدد", "error");
@@ -960,6 +963,10 @@ export function Payslips() {
     const perEmployee = {};
     list.forEach((item) => {
       const key = item.employeeId;
+      // إذا تم تحديد موظفين، نطبع فقط المختارين
+      if (selectedEmployeeIds && selectedEmployeeIds.length > 0 && !selectedEmployeeIds.includes(key)) {
+        return;
+      }
       const current = perEmployee[key];
       if (!current || (item.periodStart || "") > (current.periodStart || "")) {
         perEmployee[key] = item;
@@ -967,6 +974,10 @@ export function Payslips() {
     });
 
     const perEmployeeList = Object.values(perEmployee);
+    if (perEmployeeList.length === 0) {
+      showToast("لم يتم العثور على كشوف للموظفين المختارين", "error");
+      return;
+    }
     const totalNet = perEmployeeList.reduce(
       (sum, item) => sum + (parseFloat(item.netPay) || 0),
       0
@@ -1052,7 +1063,7 @@ export function Payslips() {
     printWindow.document.write(`
       <html dir="rtl">
         <head>
-          <title>كشوف الرواتب - ${selectedMonth || "الكل"}</title>
+          <title>كشوف الرواتب${location ? ` - ${location}` : ""} - ${selectedMonth || "الكل"}</title>
           <style>
             body { font-family: Arial, sans-serif; padding: 20px; position: relative; }
             .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
@@ -1074,14 +1085,14 @@ export function Payslips() {
             ${logoBase64 ? `<img src="${logoBase64}" alt="Logo" class="logo" />` : "<div></div>"}
           </div>
           <div class="header">
-            <h1>كشوف الرواتب - ${selectedMonth || "كل الشهور"}</h1>
+            <h1>كشوف الرواتب${location && location.trim() ? ` ${location}` : ""} - ${selectedMonth || "كل الشهور"}</h1>
           </div>
           <table>
             <thead>
               <tr>
                 <th>الموظف</th>
                 <th>الأساسي</th>
-                <th>البدلات</th>
+                <th>الحوافز</th>
                 <th>إضافي</th>
                 <th>مكافآت</th>
                 <th>سلف</th>
@@ -1141,6 +1152,23 @@ export function Payslips() {
   const getEmployeeName = (employeeId) => {
     const employee = employees.find((emp) => emp.employeeId === employeeId);
     return employee ? employee.name : employeeId;
+  };
+
+  const openPrintSelectionModal = () => {
+    const list = filteredPayslips;
+    if (!list || list.length === 0) {
+      showToast("لا توجد كشوف في الشهر المحدد", "error");
+      return;
+    }
+    // احصل على قائمة الموظفين الفريدة من الكشوف
+    const uniqueEmployeeIds = [...new Set(list.map((p) => p.employeeId))];
+    setSelectedEmployeesForPrint(uniqueEmployeeIds); // افتراضي: الكل
+    setIsPrintSelectionModalOpen(true);
+  };
+
+  const handleConfirmPrint = () => {
+    setIsPrintSelectionModalOpen(false);
+    handlePrintAllMonthly(selectedEmployeesForPrint, selectedLocation);
   };
 
   const addManualDeduction = () => {
@@ -1213,7 +1241,7 @@ export function Payslips() {
             تصدير Excel
           </button>
           <button
-            onClick={handlePrintAllMonthly}
+            onClick={openPrintSelectionModal}
             className="px-4 py-2 bg-emerald-700 text-white rounded-lg hover:bg-emerald-800 transition-colors"
           >
             طباعة الكل (الشهر)
@@ -1333,7 +1361,7 @@ export function Payslips() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                البدلات
+                الحوافز
               </label>
               <input
                 type="number"
@@ -1651,7 +1679,7 @@ export function Payslips() {
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-600">البدلات:</span>
+                  <span className="text-gray-600">الحوافز:</span>
                   <span className="font-semibold text-emerald-600">
                     +{parseFloat(formData.allowances || 0).toFixed(2)} ج.م
                   </span>
@@ -1799,7 +1827,7 @@ export function Payslips() {
                 <p className="font-semibold">{viewingItem.basicSalary} ج.م</p>
               </div>
               <div>
-                <p className="text-sm text-gray-600">البدلات</p>
+                <p className="text-sm text-gray-600">الحوافز</p>
                 <p className="font-semibold">
                   {viewingItem.allowances || 0} ج.م
                 </p>
@@ -1911,6 +1939,98 @@ export function Payslips() {
           onClose={() => setToast(null)}
         />
       )}
+
+      <Modal
+        isOpen={isPrintSelectionModalOpen}
+        onClose={() => setIsPrintSelectionModalOpen(false)}
+        title="اختيار الموظفين للطباعة"
+        size="lg"
+      >
+        <div className="space-y-4">
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              الموقع:
+            </label>
+            <select
+              value={selectedLocation}
+              onChange={(e) => setSelectedLocation(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+            >
+              <option value="">بدون</option>
+              <option value="المكتب">المكتب</option>
+              <option value="المصنع">المصنع</option>
+              <option value="الموقع">الموقع</option>
+            </select>
+          </div>
+          <div className="flex justify-between items-center mb-4">
+            <button
+              onClick={() => {
+                const list = filteredPayslips;
+                const uniqueEmployeeIds = [...new Set(list.map((p) => p.employeeId))];
+                setSelectedEmployeesForPrint(uniqueEmployeeIds);
+              }}
+              className="px-3 py-1 bg-sky-100 text-sky-700 rounded hover:bg-sky-200 text-sm"
+            >
+              تحديد الكل
+            </button>
+            <button
+              onClick={() => setSelectedEmployeesForPrint([])}
+              className="px-3 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 text-sm"
+            >
+              إلغاء التحديد
+            </button>
+          </div>
+          <div className="max-h-96 overflow-y-auto border border-gray-200 rounded-lg p-4">
+            {(() => {
+              const list = filteredPayslips;
+              const uniqueEmployeeIds = [...new Set(list.map((p) => p.employeeId))];
+              return uniqueEmployeeIds.map((empId) => {
+                const employee = employees.find((emp) => emp.employeeId === empId);
+                const isSelected = selectedEmployeesForPrint.includes(empId);
+                return (
+                  <label
+                    key={empId}
+                    className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedEmployeesForPrint([...selectedEmployeesForPrint, empId]);
+                        } else {
+                          setSelectedEmployeesForPrint(
+                            selectedEmployeesForPrint.filter((id) => id !== empId)
+                          );
+                        }
+                      }}
+                      className="w-4 h-4 text-sky-600 border-gray-300 rounded focus:ring-sky-500"
+                    />
+                    <span className="text-sm text-gray-700">
+                      {employee ? employee.name : empId}
+                    </span>
+                  </label>
+                );
+              });
+            })()}
+          </div>
+          <div className="flex gap-3 justify-end pt-4 border-t">
+            <button
+              onClick={() => setIsPrintSelectionModalOpen(false)}
+              className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300"
+            >
+              إلغاء
+            </button>
+            <button
+              onClick={handleConfirmPrint}
+              disabled={selectedEmployeesForPrint.length === 0}
+              className="px-4 py-2 bg-emerald-700 text-white rounded-lg hover:bg-emerald-800 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              طباعة ({selectedEmployeesForPrint.length})
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

@@ -3,10 +3,12 @@ import { useERPStorage } from '../../hooks/useERPStorage';
 import { exportToExcel, importFromExcel } from '../../utils/excelUtils';
 import { Modal } from '../../components/Modal';
 import { Toast } from '../../components/Toast';
+import { useModulePermissions } from '../../hooks/usePermissions';
 
 export function Attendance() {
   const { data: attendanceData, addItem, updateItem, deleteItem, replaceAll } = useERPStorage('attendance');
   const { data: employees } = useERPStorage('employees');
+  const permissions = useModulePermissions('attendance');
   const [selectedMonth, setSelectedMonth] = useState(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -76,6 +78,8 @@ export function Attendance() {
         checkOut: '17:00',
         hoursWorked: hoursCalc.totalHours,
         overtimeHours: hoursCalc.overtimeHours,
+        lateHours: hoursCalc.lateHours,
+        earlyLeaveHours: hoursCalc.earlyLeaveHours,
         present: true,
         notes: '',
       });
@@ -100,6 +104,8 @@ export function Attendance() {
         checkOut,
         hoursWorked: hoursCalc.totalHours,
         overtimeHours: hoursCalc.overtimeHours,
+        lateHours: hoursCalc.lateHours,
+        earlyLeaveHours: hoursCalc.earlyLeaveHours,
       }, 'attendanceId');
       showToast('تم تحديث الأوقات بنجاح');
       setIsEditModalOpen(false);
@@ -108,11 +114,17 @@ export function Attendance() {
   };
 
   const calculateHours = (checkIn, checkOut) => {
-    if (!checkIn || !checkOut) return { totalHours: 0, overtimeHours: 0 };
+    if (!checkIn || !checkOut) return { totalHours: 0, overtimeHours: 0, lateHours: 0, earlyLeaveHours: 0 };
     const [inHour, inMin] = checkIn.split(':').map(Number);
     const [outHour, outMin] = checkOut.split(':').map(Number);
     const inTime = inHour * 60 + inMin;
-    const outTime = outHour * 60 + outMin;
+    let outTime = outHour * 60 + outMin;
+    
+    // إذا كان وقت الانصراف أقل من وقت الحضور، نعتبره اليوم التالي
+    if (outTime < inTime) {
+      outTime += 24 * 60; // إضافة 24 ساعة
+    }
+    
     const totalHours = (outTime - inTime) / 60;
     
     // يوم العمل العادي: من 9 صباحاً (540 دقيقة) إلى 5 مساءاً (1020 دقيقة) = 8 ساعات
@@ -121,6 +133,18 @@ export function Attendance() {
     const normalHours = 8;
     
     let overtimeHours = 0;
+    let lateHours = 0;
+    let earlyLeaveHours = 0;
+    
+    // حساب ساعات التأخير: إذا حضر بعد الساعة 9
+    if (inTime > normalStart) {
+      lateHours = (inTime - normalStart) / 60;
+    }
+    
+    // حساب ساعات الانصراف المبكر: إذا انصرف قبل الساعة 5 (ولكن في نفس اليوم)
+    if (outTime < normalEnd && outTime < 24 * 60) {
+      earlyLeaveHours = (normalEnd - outTime) / 60;
+    }
     
     // حساب الساعات الإضافية
     // الساعات قبل 9 صباحاً
@@ -130,24 +154,36 @@ export function Attendance() {
     
     // الساعات بعد 5 مساءاً
     if (outTime > normalEnd) {
-      overtimeHours += (outTime - normalEnd) / 60;
+      // إذا كان الانصراف في اليوم التالي (بعد منتصف الليل)
+      if (outTime >= 24 * 60) {
+        // الساعات من 17:00 حتى منتصف الليل (7 ساعات)
+        overtimeHours += (24 * 60 - normalEnd) / 60;
+        // الساعات من منتصف الليل حتى وقت الانصراف
+        const nextDayOutTime = outTime - (24 * 60);
+        overtimeHours += nextDayOutTime / 60;
+      } else {
+        // الانصراف في نفس اليوم بعد 17:00
+        overtimeHours += (outTime - normalEnd) / 60;
+      }
     }
     
     // إذا كان الدخول بعد 9 صباحاً أو الخروج قبل 5 مساءاً
     // نحسب الساعات الفعلية في وقت العمل العادي
     const actualNormalStart = Math.max(inTime, normalStart);
-    const actualNormalEnd = Math.min(outTime, normalEnd);
+    const actualNormalEnd = Math.min(outTime >= 24 * 60 ? normalEnd : outTime, normalEnd);
     const actualNormalHours = Math.max(0, (actualNormalEnd - actualNormalStart) / 60);
     
     // إذا كانت الساعات الفعلية أقل من 8 ساعات، لا يوجد ساعات إضافية
-    // بل نقص في الساعات
-    if (actualNormalHours < normalHours && totalHours < normalHours) {
+    // بل نقص في الساعات (فقط إذا كان الانصراف في نفس اليوم)
+    if (actualNormalHours < normalHours && totalHours < normalHours && outTime < 24 * 60) {
       overtimeHours = 0;
     }
     
     return {
       totalHours: parseFloat(totalHours.toFixed(1)),
       overtimeHours: parseFloat(Math.max(0, overtimeHours).toFixed(1)),
+      lateHours: parseFloat(Math.max(0, lateHours).toFixed(1)),
+      earlyLeaveHours: parseFloat(Math.max(0, earlyLeaveHours).toFixed(1)),
     };
   };
 
@@ -189,6 +225,14 @@ export function Attendance() {
           const calc = calculateHours(item.checkIn || item['checkIn'] || '09:00', item.checkOut || item['checkOut'] || '17:00');
           return calc.overtimeHours;
         })(),
+        lateHours: item.lateHours || item['lateHours'] || (() => {
+          const calc = calculateHours(item.checkIn || item['checkIn'] || '09:00', item.checkOut || item['checkOut'] || '17:00');
+          return calc.lateHours;
+        })(),
+        earlyLeaveHours: item.earlyLeaveHours || item['earlyLeaveHours'] || (() => {
+          const calc = calculateHours(item.checkIn || item['checkIn'] || '09:00', item.checkOut || item['checkOut'] || '17:00');
+          return calc.earlyLeaveHours;
+        })(),
         present: item.present !== false,
         notes: item.notes || item['notes'] || '',
       }));
@@ -213,6 +257,16 @@ export function Attendance() {
     }
   };
 
+  if (!permissions.view) {
+    return (
+      <div className="space-y-6">
+        <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-3 rounded-lg">
+          ليس لديك صلاحية لعرض هذه الصفحة
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -224,18 +278,22 @@ export function Attendance() {
             onChange={(e) => setSelectedMonth(e.target.value)}
             className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
           />
-          <button
-            onClick={handleExport}
-            className="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors"
-          >
-            تصدير Excel
-          </button>
-          <button
-            onClick={() => setIsImportModalOpen(true)}
-            className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
-          >
-            استيراد Excel
-          </button>
+          {permissions.view && (
+            <button
+              onClick={handleExport}
+              className="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors"
+            >
+              تصدير Excel
+            </button>
+          )}
+          {permissions.create && (
+            <button
+              onClick={() => setIsImportModalOpen(true)}
+              className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
+            >
+              استيراد Excel
+            </button>
+          )}
         </div>
       </div>
 
@@ -288,6 +346,12 @@ export function Attendance() {
                   <th className="px-4 py-3 text-center font-semibold text-gray-800 bg-sky-200">
                     الساعات الإضافية
                   </th>
+                  <th className="px-4 py-3 text-center font-semibold text-gray-800 bg-rose-200">
+                    ساعات التأخير
+                  </th>
+                  <th className="px-4 py-3 text-center font-semibold text-gray-800 bg-orange-200">
+                    ساعات الانصراف المبكر
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
@@ -315,8 +379,9 @@ export function Attendance() {
                               <input
                                 type="checkbox"
                                 checked={isPresent}
-                                onChange={() => toggleAttendance(employeeId, day.date)}
-                                className="w-5 h-5 text-sky-600 rounded focus:ring-sky-500"
+                                onChange={() => permissions.create && toggleAttendance(employeeId, day.date)}
+                                disabled={!permissions.create}
+                                className="w-5 h-5 text-sky-600 rounded focus:ring-sky-500 disabled:opacity-50 disabled:cursor-not-allowed"
                                 title={isPresent ? 'حاضر' : 'غائب'}
                               />
                               {isPresent && record && (
@@ -332,13 +397,25 @@ export function Attendance() {
                                       +{record.overtimeHours}س
                                     </div>
                                   )}
-                                  <button
-                                    onClick={() => handleEditTime(employeeId, day.date)}
-                                    className="text-sky-600 hover:text-sky-700 text-xs underline"
-                                    title="تعديل الأوقات"
-                                  >
-                                    تعديل
-                                  </button>
+                                  {record.lateHours > 0 && (
+                                    <div className="text-red-600 font-semibold" title="ساعات تأخير">
+                                      -{record.lateHours}س
+                                    </div>
+                                  )}
+                                  {record.earlyLeaveHours > 0 && (
+                                    <div className="text-orange-600 font-semibold" title="ساعات انصراف مبكر">
+                                      -{record.earlyLeaveHours}س
+                                    </div>
+                                  )}
+                                  {isPresent && record && permissions.edit && (
+                                    <button
+                                      onClick={() => handleEditTime(employeeId, day.date)}
+                                      className="text-sky-600 hover:text-sky-700 text-xs underline"
+                                      title="تعديل الأوقات"
+                                    >
+                                      تعديل
+                                    </button>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -361,6 +438,36 @@ export function Attendance() {
                           );
                           const totalOvertime = records.reduce((sum, r) => sum + (parseFloat(r.overtimeHours) || 0), 0);
                           return totalOvertime > 0 ? `${totalOvertime.toFixed(1)} ساعة` : '-';
+                        })()}
+                      </td>
+                      <td className="px-4 py-3 text-center font-semibold text-gray-800 bg-rose-50">
+                        {(() => {
+                          const [year, month] = selectedMonth.split('-').map(Number);
+                          const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
+                          const endDate = `${year}-${String(month).padStart(2, '0')}-${String(getDaysInMonth(year, month)).padStart(2, '0')}`;
+                          const records = attendanceData.filter(record => 
+                            record.employeeId === employeeId &&
+                            record.date >= startDate &&
+                            record.date <= endDate &&
+                            record.present !== false
+                          );
+                          const totalLate = records.reduce((sum, r) => sum + (parseFloat(r.lateHours) || 0), 0);
+                          return totalLate > 0 ? `${totalLate.toFixed(1)} ساعة` : '-';
+                        })()}
+                      </td>
+                      <td className="px-4 py-3 text-center font-semibold text-gray-800 bg-orange-50">
+                        {(() => {
+                          const [year, month] = selectedMonth.split('-').map(Number);
+                          const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
+                          const endDate = `${year}-${String(month).padStart(2, '0')}-${String(getDaysInMonth(year, month)).padStart(2, '0')}`;
+                          const records = attendanceData.filter(record => 
+                            record.employeeId === employeeId &&
+                            record.date >= startDate &&
+                            record.date <= endDate &&
+                            record.present !== false
+                          );
+                          const totalEarlyLeave = records.reduce((sum, r) => sum + (parseFloat(r.earlyLeaveHours) || 0), 0);
+                          return totalEarlyLeave > 0 ? `${totalEarlyLeave.toFixed(1)} ساعة` : '-';
                         })()}
                       </td>
                     </tr>
@@ -411,16 +518,59 @@ function EditTimeModal({ isOpen, onClose, onSave, record }) {
 
   useEffect(() => {
     if (record) {
-      setCheckIn(record.checkIn || '08:00');
+      setCheckIn(record.checkIn || '09:00');
       setCheckOut(record.checkOut || '17:00');
     }
   }, [record]);
+
+  // حساب الساعات الإضافية تلقائياً
+  const calculateOvertimeHours = () => {
+    if (!checkIn || !checkOut) return 0;
+    
+    const [inHour, inMin] = checkIn.split(':').map(Number);
+    const [outHour, outMin] = checkOut.split(':').map(Number);
+    const inTime = inHour * 60 + inMin;
+    let outTime = outHour * 60 + outMin;
+    
+    // إذا كان وقت الانصراف أقل من وقت الحضور، نعتبره اليوم التالي
+    if (outTime < inTime) {
+      outTime += 24 * 60; // إضافة 24 ساعة
+    }
+    
+    const normalEnd = 17 * 60; // 17:00 بالدقائق
+    const normalStart = 9 * 60; // 9:00 بالدقائق
+    
+    let overtimeHours = 0;
+    
+    // الساعات الإضافية قبل 9 صباحاً
+    if (inTime < normalStart) {
+      overtimeHours += (normalStart - inTime) / 60;
+    }
+    
+    // الساعات الإضافية بعد 5 مساءاً
+    if (outTime > normalEnd) {
+      // إذا كان الانصراف في اليوم التالي
+      if (outTime >= 24 * 60) {
+        // الساعات من 17:00 حتى منتصف الليل (7 ساعات)
+        overtimeHours += (24 * 60 - normalEnd) / 60;
+        // الساعات من منتصف الليل حتى وقت الانصراف
+        const nextDayOutTime = outTime - (24 * 60);
+        overtimeHours += nextDayOutTime / 60;
+      } else {
+        overtimeHours += (outTime - normalEnd) / 60;
+      }
+    }
+    
+    return parseFloat(Math.max(0, overtimeHours).toFixed(1));
+  };
 
   const handleSave = () => {
     if (checkIn && checkOut) {
       onSave(checkIn, checkOut);
     }
   };
+
+  const calculatedOvertime = calculateOvertimeHours();
 
   if (!record) return null;
 
@@ -448,7 +598,18 @@ function EditTimeModal({ isOpen, onClose, onSave, record }) {
             onChange={(e) => setCheckOut(e.target.value)}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
           />
+          <p className="text-xs text-gray-500 mt-1">
+            يمكن إدخال وقت الانصراف بعد منتصف الليل (مثال: 01:00)
+          </p>
         </div>
+        {calculatedOvertime > 0 && (
+          <div className="bg-sky-50 border border-sky-200 rounded-lg p-3">
+            <div className="flex justify-between items-center">
+              <span className="text-sm font-medium text-gray-700">الساعات الإضافية المحسوبة:</span>
+              <span className="text-lg font-bold text-sky-600">{calculatedOvertime} ساعة</span>
+            </div>
+          </div>
+        )}
         <div className="flex gap-3 justify-end pt-4">
           <button
             onClick={onClose}

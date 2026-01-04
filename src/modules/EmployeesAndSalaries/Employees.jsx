@@ -5,9 +5,11 @@ import { DataTable } from '../../components/DataTable';
 import { Modal } from '../../components/Modal';
 import { ConfirmModal } from '../../components/ConfirmModal';
 import { Toast } from '../../components/Toast';
+import { useModulePermissions } from '../../hooks/usePermissions';
 
 export function Employees() {
   const { data, addItem, updateItem, deleteItem, replaceAll } = useERPStorage('employees');
+  const permissions = useModulePermissions('employees');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -147,37 +149,51 @@ export function Employees() {
       <div className="flex justify-between items-center">
         <h2 className="text-3xl font-bold text-gray-800">إدارة الموظفين</h2>
         <div className="flex gap-3">
-          <button
-            onClick={handleExport}
-            className="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors"
-          >
-            تصدير Excel
-          </button>
-          <button
-            onClick={() => setIsImportModalOpen(true)}
-            className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
-          >
-            استيراد Excel
-          </button>
-          <button
-            onClick={() => {
-              resetForm();
-              setIsModalOpen(true);
-            }}
-            className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
-          >
-            إضافة موظف جديد
-          </button>
+          {permissions.view && (
+            <button
+              onClick={handleExport}
+              className="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors"
+            >
+              تصدير Excel
+            </button>
+          )}
+          {permissions.create && (
+            <>
+              <button
+                onClick={() => setIsImportModalOpen(true)}
+                className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
+              >
+                استيراد Excel
+              </button>
+              <button
+                onClick={() => {
+                  resetForm();
+                  setIsModalOpen(true);
+                }}
+                className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
+              >
+                إضافة موظف جديد
+              </button>
+            </>
+          )}
         </div>
       </div>
 
-      <DataTable
-        data={data}
-        columns={columns}
-        onEdit={handleEdit}
-        onDelete={handleDelete}
-        searchFields={['employeeId', 'name', 'jobTitle', 'department']}
-      />
+      {!permissions.view && (
+        <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-3 rounded-lg">
+          ليس لديك صلاحية لعرض هذه الصفحة
+        </div>
+      )}
+
+      {permissions.view && (
+        <DataTable
+          data={data}
+          columns={columns}
+          onEdit={permissions.edit ? handleEdit : null}
+          onDelete={permissions.delete ? handleDelete : null}
+          searchFields={['employeeId', 'name', 'jobTitle', 'department']}
+        />
+      )}
 
       <Modal
         isOpen={isModalOpen}
@@ -385,6 +401,7 @@ function ImportModal({ isOpen, onClose, onImport }) {
     </Modal>
   );
 }
+
 
 
 

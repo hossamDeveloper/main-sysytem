@@ -6,6 +6,7 @@ import { Modal } from "../../components/Modal";
 import { ConfirmModal } from "../../components/ConfirmModal";
 import { Toast } from "../../components/Toast";
 import logoImage from "../../assets/logo.png";
+import { useModulePermissions } from '../../hooks/usePermissions';
 
 export function Payslips() {
   const {
@@ -18,6 +19,7 @@ export function Payslips() {
   const { data: employees } = useERPStorage("employees");
   const { data: loansData, updateItem: updateLoan } = useERPStorage("loans");
   const { data: attendanceData } = useERPStorage("attendance");
+  const permissions = useModulePermissions("payslips");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -27,9 +29,6 @@ export function Payslips() {
   const [itemToDelete, setItemToDelete] = useState(null);
   const [toast, setToast] = useState(null);
   const [selectedMonth, setSelectedMonth] = useState("");
-  const [isPrintSelectionModalOpen, setIsPrintSelectionModalOpen] = useState(false);
-  const [selectedEmployeesForPrint, setSelectedEmployeesForPrint] = useState([]);
-  const [selectedLocation, setSelectedLocation] = useState("المكتب");
   const [formData, setFormData] = useState({
     payslipId: "",
     employeeId: "",
@@ -120,6 +119,8 @@ export function Payslips() {
       allowances: "",
       overtimeHours: "",
       overtimeRate: "",
+      lateHours: "",
+      earlyLeaveHours: "",
       penalties: "",
       rewards: "",
       insurance: "",
@@ -197,11 +198,96 @@ export function Payslips() {
     }, 0);
   };
 
-  const calculateOvertimeRate = (basicSalary, allowances) => {
-    // سعر الساعة الإضافية = (الراتب الأساسي + الحافز) ÷ 30 يوم ÷ 8 ساعات
+  const getLateHours = (employeeId, periodStart, periodEnd) => {
+    const records = attendanceData.filter(
+      (record) =>
+        record.employeeId === employeeId &&
+        record.date >= periodStart &&
+        record.date <= periodEnd &&
+        record.present !== false
+    );
+
+    return records.reduce((total, record) => {
+      return total + (parseFloat(record.lateHours) || 0);
+    }, 0);
+  };
+
+  const getEarlyLeaveHours = (employeeId, periodStart, periodEnd) => {
+    const records = attendanceData.filter(
+      (record) =>
+        record.employeeId === employeeId &&
+        record.date >= periodStart &&
+        record.date <= periodEnd &&
+        record.present !== false
+    );
+
+    return records.reduce((total, record) => {
+      return total + (parseFloat(record.earlyLeaveHours) || 0);
+    }, 0);
+  };
+
+  const getFridayAttendanceDetails = (employeeId, periodStart, periodEnd) => {
+    const fridays = getFridaysInPeriod(periodStart, periodEnd);
+    return fridays.filter((friday) => {
+      const record = attendanceData.find(
+        (r) =>
+          r.employeeId === employeeId &&
+          r.date === friday &&
+          r.present !== false
+      );
+      return !!record;
+    });
+  };
+
+  const getLateDetails = (employeeId, periodStart, periodEnd) => {
+    return attendanceData
+      .filter(
+        (record) =>
+          record.employeeId === employeeId &&
+          record.date >= periodStart &&
+          record.date <= periodEnd &&
+          record.present !== false &&
+          parseFloat(record.lateHours || 0) > 0
+      )
+      .map((record) => ({
+        date: record.date,
+        checkIn: record.checkIn,
+        lateHours: parseFloat(record.lateHours || 0),
+      }));
+  };
+
+  const getEarlyLeaveDetails = (employeeId, periodStart, periodEnd) => {
+    return attendanceData
+      .filter(
+        (record) =>
+          record.employeeId === employeeId &&
+          record.date >= periodStart &&
+          record.date <= periodEnd &&
+          record.present !== false &&
+          parseFloat(record.earlyLeaveHours || 0) > 0
+      )
+      .map((record) => ({
+        date: record.date,
+        checkOut: record.checkOut,
+        earlyLeaveHours: parseFloat(record.earlyLeaveHours || 0),
+      }));
+  };
+
+  const getDaysInPeriod = (periodStart, periodEnd) => {
+    if (!periodStart || !periodEnd) return 30; // افتراضي 30 يوم
+    const start = new Date(periodStart);
+    const end = new Date(periodEnd);
+    const diffTime = Math.abs(end - start);
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1; // +1 لتضمين اليوم الأول والأخير
+    return diffDays;
+  };
+
+  const calculateOvertimeRate = (basicSalary, allowances, periodStart, periodEnd) => {
+    // سعر الساعة الإضافية = (الراتب الأساسي + الحافز) ÷ عدد أيام الشهر الفعلي ÷ 8 ساعات
     const totalMonthly =
       parseFloat(basicSalary || 0) + parseFloat(allowances || 0);
-    return totalMonthly / 30 / 8;
+    const daysInPeriod = getDaysInPeriod(periodStart, periodEnd);
+    return totalMonthly / daysInPeriod / 8;
   };
 
   const isFriday = (dateString) => {
@@ -260,6 +346,8 @@ export function Payslips() {
     periodEnd,
     overtimeHours,
     overtimeRate,
+    lateHours,
+    earlyLeaveHours,
     penalties,
     rewards,
     insurance
@@ -275,7 +363,18 @@ export function Payslips() {
     const allow = parseFloat(allowances) || 0;
     const overtimeHrs = parseFloat(overtimeHours) || 0;
     const overtimeRt = parseFloat(overtimeRate) || 0;
-    const overtimePay = overtimeHrs * overtimeRt;
+    const overtimePay = parseFloat((overtimeHrs * overtimeRt).toFixed(2));
+    
+    // حساب خصم التأخير والانصراف المبكر
+    const lateHrs = parseFloat(lateHours) || 0;
+    const earlyLeaveHrs = parseFloat(earlyLeaveHours) || 0;
+    const basicSalaryNum = parseFloat(basicSalary || 0);
+    const allowancesNum = parseFloat(allowances || 0);
+    const daysInPeriod = getDaysInPeriod(periodStart, periodEnd);
+    const hourlyRate = (basicSalaryNum + allowancesNum) / daysInPeriod / 8; // سعر الساعة
+    const lateDeduction = parseFloat((lateHrs * hourlyRate).toFixed(2)); // خصم التأخير (مقرب)
+    const earlyLeaveDeduction = parseFloat((earlyLeaveHrs * hourlyRate).toFixed(2)); // خصم الانصراف المبكر (مقرب)
+    
     const penaltiesAmount = parseFloat(penalties) || 0;
     const rewardsAmount = parseFloat(rewards) || 0;
     const insuranceAmount = parseFloat(insurance) || 0;
@@ -290,14 +389,12 @@ export function Payslips() {
       periodStart,
       periodEnd
     );
-    const basicSalaryNum = parseFloat(basicSalary || 0);
-    const allowancesNum = parseFloat(allowances || 0);
-    const dailySalary = (basicSalaryNum + allowancesNum) / 30;
+    const dailySalary = (basicSalaryNum + allowancesNum) / daysInPeriod;
     const fridayBonus =
-      fridayAttendanceDays > 0 ? dailySalary * fridayAttendanceDays : 0;
+      fridayAttendanceDays > 0 ? parseFloat((dailySalary * fridayAttendanceDays).toFixed(2)) : 0;
 
-    // الصافي = الراتب + البدلات + الساعات الإضافية + المكافآت + مكافأة الجمعة - الخصومات - الجزاءات - التأمين
-    return (
+    // الصافي = الراتب + البدلات + الساعات الإضافية + المكافآت + مكافأة الجمعة - الخصومات - الجزاءات - التأمين - خصم التأخير - خصم الانصراف المبكر
+    const netPay = 
       salaryBasedOnAttendance +
       allow +
       overtimePay +
@@ -305,8 +402,11 @@ export function Payslips() {
       fridayBonus -
       deduct -
       penaltiesAmount -
-      insuranceAmount
-    );
+      insuranceAmount -
+      lateDeduction -
+      earlyLeaveDeduction;
+    
+    return parseFloat(netPay.toFixed(2));
   };
 
   const resetForm = () => {
@@ -319,6 +419,8 @@ export function Payslips() {
       allowances: "",
       overtimeHours: "",
       overtimeRate: "",
+      lateHours: "",
+      earlyLeaveHours: "",
       penalties: "",
       rewards: "",
       insurance: "",
@@ -349,8 +451,27 @@ export function Payslips() {
           formData.periodEnd
         );
 
+        // حساب ساعات التأخير من بيانات الحضور
+        const totalLateHours = getLateHours(
+          formData.employeeId,
+          formData.periodStart,
+          formData.periodEnd
+        );
+
+        // حساب ساعات الانصراف المبكر من بيانات الحضور
+        const totalEarlyLeaveHours = getEarlyLeaveHours(
+          formData.employeeId,
+          formData.periodStart,
+          formData.periodEnd
+        );
+
         // حساب سعر الساعة الإضافية
-        const overtimeRate = calculateOvertimeRate(basicSalary, fixedAllowance);
+        const overtimeRate = calculateOvertimeRate(
+          basicSalary,
+          fixedAllowance,
+          formData.periodStart,
+          formData.periodEnd
+        );
 
         setFormData((prev) => ({
           ...prev,
@@ -364,6 +485,14 @@ export function Payslips() {
             overtimeRate > 0
               ? overtimeRate.toFixed(2)
               : prev.overtimeRate || "",
+          lateHours:
+            totalLateHours > 0
+              ? totalLateHours.toFixed(1)
+              : prev.lateHours || "",
+          earlyLeaveHours:
+            totalEarlyLeaveHours > 0
+              ? totalEarlyLeaveHours.toFixed(1)
+              : prev.earlyLeaveHours || "",
         }));
       }
 
@@ -424,7 +553,8 @@ export function Payslips() {
           formData.allowances || employee.fixedAllowance || 0
         );
         const totalMonthlySalary = basicSalary + fixedAllowance;
-        const dailySalary = totalMonthlySalary / 30; // ثابت 30 يوم
+        const daysInPeriod = getDaysInPeriod(formData.periodStart, formData.periodEnd);
+        const dailySalary = totalMonthlySalary / daysInPeriod; // عدد الأيام الفعلية في الشهر
 
         // خصم الغياب (فقط للأيام غير الجمعة)
         if (absentDays > 0) {
@@ -488,6 +618,8 @@ export function Payslips() {
       formData.periodEnd,
       formData.overtimeHours,
       formData.overtimeRate,
+      formData.lateHours,
+      formData.earlyLeaveHours,
       formData.penalties,
       formData.rewards,
       formData.insurance
@@ -502,6 +634,8 @@ export function Payslips() {
     formData.periodEnd,
     formData.overtimeHours,
     formData.overtimeRate,
+    formData.lateHours,
+    formData.earlyLeaveHours,
     formData.penalties,
     formData.rewards,
     formData.insurance,
@@ -529,6 +663,8 @@ export function Payslips() {
       allowances: parseFloat(formData.allowances) || 0,
       overtimeHours: parseFloat(formData.overtimeHours) || 0,
       overtimeRate: parseFloat(formData.overtimeRate) || 0,
+      lateHours: parseFloat(formData.lateHours) || 0,
+      earlyLeaveHours: parseFloat(formData.earlyLeaveHours) || 0,
       penalties: parseFloat(formData.penalties) || 0,
       rewards: parseFloat(formData.rewards) || 0,
       insurance: parseFloat(formData.insurance) || 0,
@@ -639,6 +775,8 @@ export function Payslips() {
       allowances: item.allowances || "",
       overtimeHours: item.overtimeHours || "",
       overtimeRate: item.overtimeRate || "",
+      lateHours: item.lateHours || "",
+      earlyLeaveHours: item.earlyLeaveHours || "",
       penalties: item.penalties || "",
       rewards: item.rewards || "",
       insurance: item.insurance || "",
@@ -877,64 +1015,117 @@ export function Payslips() {
                 ? `<div class="metric"><strong>مكافآت:</strong> ${item.rewards} ج.م</div>`
                 : ""
             }
-            <div class="metric"><strong>الخصومات (أقساط السلف + غياب):</strong> ${item.deductions
+            <div class="metric"><strong>الخصومات (غياب):</strong> ${item.deductions
+              .filter((d) => !d.source || d.source !== "erp_loans")
               .reduce((sum, d) => sum + parseFloat(d.amount || 0), 0)
               .toFixed(2)} ج.م</div>
-            ${
-              item.penalties > 0
-                ? `<div class="metric"><strong>جزاءات:</strong> ${item.penalties} ج.م</div>`
-                : ""
-            }
-            ${
-              item.insurance > 0
-                ? `<div class="metric"><strong>تأمين:</strong> ${item.insurance} ج.م</div>`
-                : ""
-            }
+            ${(() => {
+              const basicSalary = parseFloat(item.basicSalary || 0);
+              const fixedAllowance = parseFloat(item.allowances || 0);
+              const daysInPeriod = getDaysInPeriod(item.periodStart, item.periodEnd);
+              const hourlyRate = (basicSalary + fixedAllowance) / daysInPeriod / 8;
+              const lateHrs = parseFloat(item.lateHours || 0);
+              const earlyLeaveHrs = parseFloat(item.earlyLeaveHours || 0);
+              const lateDeduction = lateHrs * hourlyRate;
+              const earlyLeaveDeduction = earlyLeaveHrs * hourlyRate;
+              
+              // حساب مكافأة حضور الجمعة
+              const fridayAttendanceDays = getFridayAttendanceDays(
+                item.employeeId,
+                item.periodStart,
+                item.periodEnd
+              );
+              const dailySalary = (basicSalary + fixedAllowance) / daysInPeriod;
+              const fridayBonus = fridayAttendanceDays > 0 ? dailySalary * fridayAttendanceDays : 0;
+              
+              // حساب إجمالي السلف
+              const loansTotal = item.deductions
+                .filter((d) => d.source === "erp_loans")
+                .reduce((sum, d) => sum + parseFloat(d.amount || 0), 0);
+              
+              let result = "";
+              if (loansTotal > 0) {
+                result += `<div class="metric"><strong>السلف:</strong> -${loansTotal.toFixed(2)} ج.م</div>`;
+              }
+              if (lateHrs > 0) {
+                result += `<div class="metric"><strong>خصم التأخير:</strong> ${lateHrs} ساعة × ${hourlyRate.toFixed(2)} = -${lateDeduction.toFixed(2)} ج.م</div>`;
+              }
+              if (earlyLeaveHrs > 0) {
+                result += `<div class="metric"><strong>خصم الانصراف المبكر:</strong> ${earlyLeaveHrs} ساعة × ${hourlyRate.toFixed(2)} = -${earlyLeaveDeduction.toFixed(2)} ج.م</div>`;
+              }
+              if (item.penalties > 0) {
+                result += `<div class="metric"><strong>جزاءات:</strong> -${item.penalties} ج.م</div>`;
+              }
+              if (item.insurance > 0) {
+                result += `<div class="metric"><strong>تأمين:</strong> -${item.insurance} ج.م</div>`;
+              }
+              if (fridayAttendanceDays > 0) {
+                result += `<div class="metric"><strong>مكافأة حضور الجمعة:</strong> ${fridayAttendanceDays} يوم × ${dailySalary.toFixed(2)} = +${fridayBonus.toFixed(2)} ج.م</div>`;
+              }
+              return result;
+            })()}
           </div>
-          <table class="netpay-table">
-            <thead>
-              <tr>
-                <th>الصافي</th>
-                <td><strong>${item.netPay} ج.م</strong></td>
-              </tr>
-            </thead>
-          </table>
-          ${
-            item.deductions.length > 0
-              ? (() => {
-                  const absentDaysForPeriod = getAbsentDays(
-                    item.employeeId,
-                    item.periodStart,
-                    item.periodEnd
-                  );
-                  return `
-                  <h3>تفاصيل الخصومات:</h3>
-                  <table style="width: 100%; border-collapse: collapse; margin-top: 8px;">
-                    <thead>
-                      <tr>
-                        <th style="text-align:center; border: 1px solid #000; padding: 6px;">النوع</th>
-                        <th style="text-align:center; border: 1px solid #000; padding: 6px;">المبلغ</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      ${item.deductions
-                        .map((d) => {
-                          const absentInfo =
-                            (d.type || "").includes("غياب") && absentDaysForPeriod > 0
-                              ? ` (أيام الغياب: ${absentDaysForPeriod})`
-                              : "";
-                          return `<tr>
-                            <td style="text-align:center; border: 1px solid #000; padding: 6px;">${d.type}${absentInfo}</td>
-                            <td style="text-align:center; border: 1px solid #000; padding: 6px;">${parseFloat(d.amount || 0).toFixed(2)} ج.م</td>
-                          </tr>`;
-                        })
-                        .join("")}
-                    </tbody>
-                  </table>
-                `;
-                })()
-              : ""
-          }
+          ${(() => {
+            // إعادة حساب الصافي بدقة
+            const basicSalary = parseFloat(item.basicSalary || 0);
+            const allowances = parseFloat(item.allowances || 0);
+            const overtimeHrs = parseFloat(item.overtimeHours || 0);
+            const overtimeRt = parseFloat(item.overtimeRate || 0);
+            const overtimePay = parseFloat((overtimeHrs * overtimeRt).toFixed(2));
+            const rewards = parseFloat(item.rewards || 0);
+            const penalties = parseFloat(item.penalties || 0);
+            const insurance = parseFloat(item.insurance || 0);
+            
+            // حساب الخصومات (السلف + الغياب)
+            const loansTotal = item.deductions
+              .filter((d) => d.source === "erp_loans")
+              .reduce((sum, d) => sum + parseFloat(d.amount || 0), 0);
+            const absenceTotal = item.deductions
+              .filter((d) => !d.source || d.source !== "erp_loans")
+              .reduce((sum, d) => sum + parseFloat(d.amount || 0), 0);
+            const totalDeductions = loansTotal + absenceTotal;
+            
+            // حساب خصم التأخير والانصراف المبكر
+            const daysInPeriod = getDaysInPeriod(item.periodStart, item.periodEnd);
+            const hourlyRate = (basicSalary + allowances) / daysInPeriod / 8;
+            const lateHrs = parseFloat(item.lateHours || 0);
+            const earlyLeaveHrs = parseFloat(item.earlyLeaveHours || 0);
+            const lateDeduction = parseFloat((lateHrs * hourlyRate).toFixed(2));
+            const earlyLeaveDeduction = parseFloat((earlyLeaveHrs * hourlyRate).toFixed(2));
+            
+            // حساب مكافأة حضور الجمعة
+            const fridayAttendanceDays = getFridayAttendanceDays(
+              item.employeeId,
+              item.periodStart,
+              item.periodEnd
+            );
+            const dailySalary = (basicSalary + allowances) / daysInPeriod;
+            const fridayBonus = fridayAttendanceDays > 0 ? parseFloat((dailySalary * fridayAttendanceDays).toFixed(2)) : 0;
+            
+            // حساب الصافي بدقة
+            const calculatedNetPay = 
+              basicSalary +
+              allowances +
+              overtimePay +
+              rewards +
+              fridayBonus -
+              totalDeductions -
+              penalties -
+              insurance -
+              lateDeduction -
+              earlyLeaveDeduction;
+            
+            return `
+              <table class="netpay-table">
+                <thead>
+                  <tr>
+                    <th>الصافي</th>
+                    <td><strong>${parseFloat(calculatedNetPay.toFixed(2)).toFixed(2)} ج.م</strong></td>
+                  </tr>
+                </thead>
+              </table>
+            `;
+          })()}
           <div class="signatures">
             <div class="signature-block">
               <strong>توقيع المحاسب</strong>
@@ -952,7 +1143,7 @@ export function Payslips() {
     printWindow.print();
   };
 
-  const handlePrintAllMonthly = async (selectedEmployeeIds = null, location = "") => {
+  const handlePrintAllMonthly = async () => {
     const list = filteredPayslips;
     if (!list || list.length === 0) {
       showToast("لا توجد كشوف في الشهر المحدد", "error");
@@ -963,10 +1154,6 @@ export function Payslips() {
     const perEmployee = {};
     list.forEach((item) => {
       const key = item.employeeId;
-      // إذا تم تحديد موظفين، نطبع فقط المختارين
-      if (selectedEmployeeIds && selectedEmployeeIds.length > 0 && !selectedEmployeeIds.includes(key)) {
-        return;
-      }
       const current = perEmployee[key];
       if (!current || (item.periodStart || "") > (current.periodStart || "")) {
         perEmployee[key] = item;
@@ -974,10 +1161,6 @@ export function Payslips() {
     });
 
     const perEmployeeList = Object.values(perEmployee);
-    if (perEmployeeList.length === 0) {
-      showToast("لم يتم العثور على كشوف للموظفين المختارين", "error");
-      return;
-    }
     const totalNet = perEmployeeList.reduce(
       (sum, item) => sum + (parseFloat(item.netPay) || 0),
       0
@@ -995,7 +1178,8 @@ export function Payslips() {
           item.periodStart,
           item.periodEnd
         );
-        const fridayBonus = ((basic + allow) / 30) * fridayDays;
+        const daysInPeriod = getDaysInPeriod(item.periodStart, item.periodEnd);
+        const fridayBonus = ((basic + allow) / daysInPeriod) * fridayDays;
         const loanDeductions = item.deductions
           .filter((d) => d.source === "erp_loans")
           .reduce((sum, d) => sum + parseFloat(d.amount || 0), 0);
@@ -1063,7 +1247,7 @@ export function Payslips() {
     printWindow.document.write(`
       <html dir="rtl">
         <head>
-          <title>كشوف الرواتب${location ? ` - ${location}` : ""} - ${selectedMonth || "الكل"}</title>
+          <title>كشوف الرواتب - ${selectedMonth || "الكل"}</title>
           <style>
             body { font-family: Arial, sans-serif; padding: 20px; position: relative; }
             .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
@@ -1085,7 +1269,7 @@ export function Payslips() {
             ${logoBase64 ? `<img src="${logoBase64}" alt="Logo" class="logo" />` : "<div></div>"}
           </div>
           <div class="header">
-            <h1>كشوف الرواتب${location && location.trim() ? ` ${location}` : ""} - ${selectedMonth || "كل الشهور"}</h1>
+            <h1>كشوف الرواتب - ${selectedMonth || "كل الشهور"}</h1>
           </div>
           <table>
             <thead>
@@ -1154,23 +1338,6 @@ export function Payslips() {
     return employee ? employee.name : employeeId;
   };
 
-  const openPrintSelectionModal = () => {
-    const list = filteredPayslips;
-    if (!list || list.length === 0) {
-      showToast("لا توجد كشوف في الشهر المحدد", "error");
-      return;
-    }
-    // احصل على قائمة الموظفين الفريدة من الكشوف
-    const uniqueEmployeeIds = [...new Set(list.map((p) => p.employeeId))];
-    setSelectedEmployeesForPrint(uniqueEmployeeIds); // افتراضي: الكل
-    setIsPrintSelectionModalOpen(true);
-  };
-
-  const handleConfirmPrint = () => {
-    setIsPrintSelectionModalOpen(false);
-    handlePrintAllMonthly(selectedEmployeesForPrint, selectedLocation);
-  };
-
   const addManualDeduction = () => {
     setFormData((prev) => ({
       ...prev,
@@ -1234,41 +1401,57 @@ export function Payslips() {
               ))}
             </select>
           </div>
-          <button
-            onClick={handleExport}
-            className="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors"
-          >
-            تصدير Excel
-          </button>
-          <button
-            onClick={openPrintSelectionModal}
-            className="px-4 py-2 bg-emerald-700 text-white rounded-lg hover:bg-emerald-800 transition-colors"
-          >
-            طباعة الكل (الشهر)
-          </button>
-          <button
-            onClick={() => setIsImportModalOpen(true)}
-            className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
-          >
-            استيراد Excel
-          </button>
-          <button
-            onClick={prepareNewPayslip}
-            className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
-          >
-            إنشاء كشف راتب جديد
-          </button>
+          {permissions.view && (
+            <>
+              <button
+                onClick={handleExport}
+                className="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors"
+              >
+                تصدير Excel
+              </button>
+              <button
+                onClick={handlePrintAllMonthly}
+                className="px-4 py-2 bg-emerald-700 text-white rounded-lg hover:bg-emerald-800 transition-colors"
+              >
+                طباعة الكل (الشهر)
+              </button>
+            </>
+          )}
+          {permissions.create && (
+            <>
+              <button
+                onClick={() => setIsImportModalOpen(true)}
+                className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
+              >
+                استيراد Excel
+              </button>
+              <button
+                onClick={prepareNewPayslip}
+                className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
+              >
+                إنشاء كشف راتب جديد
+              </button>
+            </>
+          )}
         </div>
       </div>
 
-      <DataTable
-        data={filteredPayslips}
-        columns={columns}
-        onView={handleView}
-        onEdit={handleEdit}
-        onDelete={handleDelete}
-        searchFields={["payslipId", "employeeId"]}
-      />
+      {!permissions.view && (
+        <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-3 rounded-lg">
+          ليس لديك صلاحية لعرض هذه الصفحة
+        </div>
+      )}
+
+      {permissions.view && (
+        <DataTable
+          data={filteredPayslips}
+          columns={columns}
+          onView={handleView}
+          onEdit={permissions.edit ? handleEdit : null}
+          onDelete={permissions.delete ? handleDelete : null}
+          searchFields={["payslipId", "employeeId"]}
+        />
+      )}
 
       <Modal
         isOpen={isModalOpen}
@@ -1405,7 +1588,41 @@ export function Payslips() {
                 min="0"
                 step="0.01"
                 readOnly
-                title="يتم حسابه تلقائياً: (الراتب الأساسي + الحافز) ÷ 30 ÷ 8"
+                title="يتم حسابه تلقائياً: (الراتب الأساسي + الحافز) ÷ عدد أيام الشهر الفعلي ÷ 8"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                ساعات التأخير (محسوبة تلقائياً من الحضور)
+              </label>
+              <input
+                type="number"
+                value={formData.lateHours}
+                onChange={(e) =>
+                  setFormData({ ...formData, lateHours: e.target.value })
+                }
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg bg-gray-100"
+                min="0"
+                step="0.1"
+                readOnly
+                title="يتم حسابها تلقائياً من أوقات الحضور (أي تأخير بعد الساعة 9 صباحاً)"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                ساعات الانصراف المبكر (محسوبة تلقائياً من الحضور)
+              </label>
+              <input
+                type="number"
+                value={formData.earlyLeaveHours}
+                onChange={(e) =>
+                  setFormData({ ...formData, earlyLeaveHours: e.target.value })
+                }
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg bg-gray-100"
+                min="0"
+                step="0.1"
+                readOnly
+                title="يتم حسابها تلقائياً من أوقات الانصراف (أي انصراف قبل الساعة 5 مساءاً)"
               />
             </div>
             <div>
@@ -1503,7 +1720,8 @@ export function Payslips() {
                     formData.allowances || employee?.fixedAllowance || 0
                   );
                   const totalMonthlySalary = basicSalary + fixedAllowance;
-                  const dailySalary = totalMonthlySalary / 30;
+                  const daysInPeriod = getDaysInPeriod(formData.periodStart, formData.periodEnd);
+                  const dailySalary = totalMonthlySalary / daysInPeriod;
                   const absentDeductionAmount =
                     absentDays > 0 ? (dailySalary * absentDays).toFixed(2) : 0;
                   const fridayBonusAmount =
@@ -1565,7 +1783,7 @@ export function Payslips() {
                             {totalMonthlySalary.toFixed(2)} ج.م
                           </div>
                           <div>
-                            الراتب اليومي: {totalMonthlySalary.toFixed(2)} ÷ 30
+                            الراتب اليومي: {totalMonthlySalary.toFixed(2)} ÷ {getDaysInPeriod(formData.periodStart, formData.periodEnd)}
                             = {dailySalary.toFixed(2)} ج.م
                           </div>
                           {absentDays > 0 && (
@@ -1595,7 +1813,7 @@ export function Payslips() {
                               return (
                                 <div className="font-semibold text-emerald-600">
                                   الساعات الإضافية: {totalOvertime.toFixed(1)}{" "}
-                                  ساعة × {overtimeRate.toFixed(2)} (الراتب ÷ 30
+                                  ساعة × {overtimeRate.toFixed(2)} (الراتب ÷ {getDaysInPeriod(formData.periodStart, formData.periodEnd)}
                                   ÷ 8) ={" "}
                                   {(totalOvertime * overtimeRate).toFixed(2)}{" "}
                                   ج.م
@@ -1700,6 +1918,41 @@ export function Payslips() {
                     </span>
                   </div>
                 )}
+                {(() => {
+                  const basicSalary = parseFloat(formData.basicSalary || 0);
+                  const fixedAllowance = parseFloat(formData.allowances || 0);
+                  const daysInPeriod = getDaysInPeriod(formData.periodStart, formData.periodEnd);
+                  const hourlyRate = (basicSalary + fixedAllowance) / daysInPeriod / 8;
+                  const lateHrs = parseFloat(formData.lateHours || 0);
+                  const earlyLeaveHrs = parseFloat(formData.earlyLeaveHours || 0);
+                  const lateDeduction = lateHrs * hourlyRate;
+                  const earlyLeaveDeduction = earlyLeaveHrs * hourlyRate;
+                  
+                  return (
+                    <>
+                      {lateHrs > 0 && (
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">
+                            خصم التأخير ({lateHrs} ساعة):
+                          </span>
+                          <span className="font-semibold text-red-600">
+                            -{lateDeduction.toFixed(2)} ج.م
+                          </span>
+                        </div>
+                      )}
+                      {earlyLeaveHrs > 0 && (
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">
+                            خصم الانصراف المبكر ({earlyLeaveHrs} ساعة):
+                          </span>
+                          <span className="font-semibold text-red-600">
+                            -{earlyLeaveDeduction.toFixed(2)} ج.م
+                          </span>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
                 {parseFloat(formData.rewards || 0) > 0 && (
                   <div className="flex justify-between">
                     <span className="text-gray-600">مكافآت:</span>
@@ -1716,7 +1969,8 @@ export function Payslips() {
                   );
                   const basicSalary = parseFloat(formData.basicSalary || 0);
                   const fixedAllowance = parseFloat(formData.allowances || 0);
-                  const dailySalary = (basicSalary + fixedAllowance) / 30;
+                  const daysInPeriod = getDaysInPeriod(formData.periodStart, formData.periodEnd);
+                  const dailySalary = (basicSalary + fixedAllowance) / daysInPeriod;
                   const fridayBonus =
                     fridayAttendanceDays > 0
                       ? dailySalary * fridayAttendanceDays
@@ -1846,6 +2100,37 @@ export function Payslips() {
                   </p>
                 </div>
               )}
+              {(() => {
+                const basicSalary = parseFloat(viewingItem.basicSalary || 0);
+                const fixedAllowance = parseFloat(viewingItem.allowances || 0);
+                const daysInPeriod = getDaysInPeriod(viewingItem.periodStart, viewingItem.periodEnd);
+                const hourlyRate = (basicSalary + fixedAllowance) / daysInPeriod / 8;
+                const lateHrs = parseFloat(viewingItem.lateHours || 0);
+                const earlyLeaveHrs = parseFloat(viewingItem.earlyLeaveHours || 0);
+                const lateDeduction = lateHrs * hourlyRate;
+                const earlyLeaveDeduction = earlyLeaveHrs * hourlyRate;
+                
+                return (
+                  <>
+                    {lateHrs > 0 && (
+                      <div>
+                        <p className="text-sm text-gray-600">خصم التأخير</p>
+                        <p className="font-semibold text-red-600">
+                          {lateHrs} ساعة × {hourlyRate.toFixed(2)} = -{lateDeduction.toFixed(2)} ج.م
+                        </p>
+                      </div>
+                    )}
+                    {earlyLeaveHrs > 0 && (
+                      <div>
+                        <p className="text-sm text-gray-600">خصم الانصراف المبكر</p>
+                        <p className="font-semibold text-red-600">
+                          {earlyLeaveHrs} ساعة × {hourlyRate.toFixed(2)} = -{earlyLeaveDeduction.toFixed(2)} ج.م
+                        </p>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
               {viewingItem.rewards > 0 && (
                 <div>
                   <p className="text-sm text-gray-600">مكافآت</p>
@@ -1882,6 +2167,9 @@ export function Payslips() {
                 </div>
               )}
             </div>
+
+          
+
             {viewingItem.deductions.length > 0 && (
               <div>
                 <p className="text-sm text-gray-600 mb-2">تفاصيل الخصومات:</p>
@@ -1939,98 +2227,6 @@ export function Payslips() {
           onClose={() => setToast(null)}
         />
       )}
-
-      <Modal
-        isOpen={isPrintSelectionModalOpen}
-        onClose={() => setIsPrintSelectionModalOpen(false)}
-        title="اختيار الموظفين للطباعة"
-        size="lg"
-      >
-        <div className="space-y-4">
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              الموقع:
-            </label>
-            <select
-              value={selectedLocation}
-              onChange={(e) => setSelectedLocation(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
-            >
-              <option value="">بدون</option>
-              <option value="المكتب">المكتب</option>
-              <option value="المصنع">المصنع</option>
-              <option value="الموقع">الموقع</option>
-            </select>
-          </div>
-          <div className="flex justify-between items-center mb-4">
-            <button
-              onClick={() => {
-                const list = filteredPayslips;
-                const uniqueEmployeeIds = [...new Set(list.map((p) => p.employeeId))];
-                setSelectedEmployeesForPrint(uniqueEmployeeIds);
-              }}
-              className="px-3 py-1 bg-sky-100 text-sky-700 rounded hover:bg-sky-200 text-sm"
-            >
-              تحديد الكل
-            </button>
-            <button
-              onClick={() => setSelectedEmployeesForPrint([])}
-              className="px-3 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 text-sm"
-            >
-              إلغاء التحديد
-            </button>
-          </div>
-          <div className="max-h-96 overflow-y-auto border border-gray-200 rounded-lg p-4">
-            {(() => {
-              const list = filteredPayslips;
-              const uniqueEmployeeIds = [...new Set(list.map((p) => p.employeeId))];
-              return uniqueEmployeeIds.map((empId) => {
-                const employee = employees.find((emp) => emp.employeeId === empId);
-                const isSelected = selectedEmployeesForPrint.includes(empId);
-                return (
-                  <label
-                    key={empId}
-                    className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded cursor-pointer"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          setSelectedEmployeesForPrint([...selectedEmployeesForPrint, empId]);
-                        } else {
-                          setSelectedEmployeesForPrint(
-                            selectedEmployeesForPrint.filter((id) => id !== empId)
-                          );
-                        }
-                      }}
-                      className="w-4 h-4 text-sky-600 border-gray-300 rounded focus:ring-sky-500"
-                    />
-                    <span className="text-sm text-gray-700">
-                      {employee ? employee.name : empId}
-                    </span>
-                  </label>
-                );
-              });
-            })()}
-          </div>
-          <div className="flex gap-3 justify-end pt-4 border-t">
-            <button
-              onClick={() => setIsPrintSelectionModalOpen(false)}
-              className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300"
-            >
-              إلغاء
-            </button>
-            <button
-              onClick={handleConfirmPrint}
-              disabled={selectedEmployeesForPrint.length === 0}
-              className="px-4 py-2 bg-emerald-700 text-white rounded-lg hover:bg-emerald-800 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              طباعة ({selectedEmployeesForPrint.length})
-            </button>
-          </div>
-        </div>
-      </Modal>
     </div>
   );
 }
@@ -2087,3 +2283,4 @@ function ImportModal({ isOpen, onClose, onImport }) {
     </Modal>
   );
 }
+

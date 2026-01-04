@@ -12,6 +12,9 @@ const modulesMap = {
 
 export function EmployeesAndSalaries({ activeSubModule = 'employees' }) {
   const ModuleComponent = modulesMap[activeSubModule] || Employees;
+  if (!ModuleComponent) {
+    return <div>Module not found: {activeSubModule}</div>;
+  }
   return <ModuleComponent />;
 }
 

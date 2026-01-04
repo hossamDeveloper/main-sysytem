@@ -13,6 +13,7 @@ export function Modal({
     md: 'max-w-2xl',
     lg: 'max-w-4xl',
     xl: 'max-w-6xl',
+    large: 'max-w-6xl',
   };
 
   return (

@@ -1,0 +1,140 @@
+import { useNavigate } from 'react-router-dom';
+import { useDashboardStats } from '../../services/purchasingQueries';
+import { useAppSelector } from '../../store/hooks';
+import { useCurrentUser } from '../../services/userApi';
+
+export function PurchasingDashboard() {
+  const navigate = useNavigate();
+  const { user, token } = useAppSelector((state) => state.auth);
+  const { data: currentUser } = useCurrentUser(token);
+  const { data: stats, isLoading } = useDashboardStats();
+
+  const displayUser = currentUser || user;
+
+  const quickLinks = [
+    {
+      id: 'suppliers',
+      name: 'إدارة الموردين',
+      icon: '🏢',
+      color: 'bg-blue-500',
+      hoverColor: 'hover:bg-blue-600',
+      path: '/purchasing/suppliers',
+    },
+    {
+      id: 'purchase-requests',
+      name: 'طلبات الشراء',
+      icon: '📋',
+      color: 'bg-green-500',
+      hoverColor: 'hover:bg-green-600',
+      path: '/purchasing/purchase-requests',
+    },
+    {
+      id: 'purchase-orders',
+      name: 'أوامر الشراء',
+      icon: '📝',
+      color: 'bg-yellow-500',
+      hoverColor: 'hover:bg-yellow-600',
+      path: '/purchasing/purchase-orders',
+    },
+    {
+      id: 'goods-receipt',
+      name: 'استلام البضائع',
+      icon: '📦',
+      color: 'bg-purple-500',
+      hoverColor: 'hover:bg-purple-600',
+      path: '/purchasing/goods-receipt',
+    },
+    {
+      id: 'invoices',
+      name: 'الفواتير',
+      icon: '🧾',
+      color: 'bg-red-500',
+      hoverColor: 'hover:bg-red-600',
+      path: '/purchasing/invoices',
+    },
+  ];
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-800">لوحة تحكم المشتريات</h1>
+          <p className="text-gray-600">
+            مرحباً، {displayUser?.name}
+            {displayUser?.roleName && ` (${displayUser.roleName})`}
+          </p>
+        </div>
+      </div>
+
+      {/* Statistics Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="bg-white rounded-lg shadow-lg p-6 border-l-4 border-blue-500">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-gray-600 text-sm mb-1">إجمالي الموردين</p>
+              <p className="text-3xl font-bold text-gray-800">
+                {isLoading ? '...' : stats?.totalSuppliers || 0}
+              </p>
+            </div>
+            <div className="text-4xl">🏢</div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-lg shadow-lg p-6 border-l-4 border-green-500">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-gray-600 text-sm mb-1">طلبات الشراء المفتوحة</p>
+              <p className="text-3xl font-bold text-gray-800">
+                {isLoading ? '...' : stats?.openPRs || 0}
+              </p>
+            </div>
+            <div className="text-4xl">📋</div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-lg shadow-lg p-6 border-l-4 border-yellow-500">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-gray-600 text-sm mb-1">أوامر الشراء المفتوحة</p>
+              <p className="text-3xl font-bold text-gray-800">
+                {isLoading ? '...' : stats?.openPOs || 0}
+              </p>
+            </div>
+            <div className="text-4xl">📝</div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-lg shadow-lg p-6 border-l-4 border-red-500">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-gray-600 text-sm mb-1">الفواتير المعلقة</p>
+              <p className="text-3xl font-bold text-gray-800">
+                {isLoading ? '...' : stats?.pendingInvoices || 0}
+              </p>
+            </div>
+            <div className="text-4xl">🧾</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Quick Links */}
+      <div className="bg-white rounded-lg shadow-lg p-6">
+        <h2 className="text-2xl font-bold text-gray-800 mb-6">روابط سريعة</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+          {quickLinks.map((link) => (
+            <button
+              key={link.id}
+              onClick={() => navigate(link.path)}
+              className={`${link.color} ${link.hoverColor} text-white p-6 rounded-lg transition-all transform hover:scale-105 shadow-md`}
+            >
+              <div className="text-4xl mb-3">{link.icon}</div>
+              <div className="text-lg font-semibold">{link.name}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+

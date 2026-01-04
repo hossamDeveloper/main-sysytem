@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useERPStorage } from '../../hooks/useERPStorage';
-import { exportToExcel, importFromExcel, exportWorkbook } from '../../utils/excelUtils';
+import { exportToExcel, importFromExcel } from '../../utils/excelUtils';
 import { DataTable } from '../../components/DataTable';
 import { Modal } from '../../components/Modal';
 import { ConfirmModal } from '../../components/ConfirmModal';
 import { Toast } from '../../components/Toast';
+import { useModulePermissions } from '../../hooks/usePermissions';
 
 export function Loans() {
   const { data: loansData, addItem, updateItem, deleteItem, replaceAll } = useERPStorage('loans');
   const { data: employees } = useERPStorage('employees');
+  const permissions = useModulePermissions('loans');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -72,22 +74,6 @@ export function Loans() {
       }
     });
     return Object.values(map);
-  }, [loansData]);
-
-  // حساب إجمالي السلف للشهر الحالي
-  const currentMonthTotal = useMemo(() => {
-    const now = new Date();
-    const currentYear = now.getFullYear();
-    const currentMonth = String(now.getMonth() + 1).padStart(2, '0');
-    const currentMonthStr = `${currentYear}-${currentMonth}`;
-
-    return loansData
-      .filter((loan) => {
-        if (!loan.issuedDate) return false;
-        const loanMonth = loan.issuedDate.slice(0, 7); // YYYY-MM
-        return loanMonth === currentMonthStr;
-      })
-      .reduce((sum, loan) => sum + parseFloat(loan.amount || 0), 0);
   }, [loansData]);
 
   useEffect(() => {
@@ -229,9 +215,21 @@ export function Loans() {
 
   const confirmDelete = () => {
     if (itemToDelete) {
-      deleteItem(itemToDelete.loanId, 'loanId');
-      showToast('تم حذف السلفة بنجاح');
+      // إذا كان itemToDelete يحتوي على loanId (سلفة فردية)
+      if (itemToDelete.loanId) {
+        deleteItem(itemToDelete.loanId, 'loanId');
+        showToast('تم حذف السلفة بنجاح');
+      } 
+      // إذا كان itemToDelete هو مجموعة (grouped loan) - حذف جميع سلف الموظف
+      else if (itemToDelete.employeeId) {
+        const employeeLoans = loansData.filter(loan => loan.employeeId === itemToDelete.employeeId);
+        employeeLoans.forEach(loan => {
+          deleteItem(loan.loanId, 'loanId');
+        });
+        showToast(`تم حذف جميع سلف الموظف (${employeeLoans.length} سلفة) بنجاح`);
+      }
       setItemToDelete(null);
+      setIsDeleteModalOpen(false);
     }
   };
 
@@ -269,86 +267,32 @@ export function Loans() {
     }
   };
 
-  const buildLoanDetails = () =>
-    loansData.map((loan) => {
-      const scheduleArr = (loan.schedule || []).map((s) => ({
-        ...s,
-        amount: parseNumber(s.amount),
-      }));
+  const handleExport = () => {
+    if (loansData.length === 0) {
+      showToast('لا توجد بيانات للتصدير', 'error');
+      return;
+    }
+    const exportData = loansData.map((loan) => {
+      const scheduleArr = loan.schedule || [];
       const unpaidTotal = scheduleArr.reduce(
-        (sum, s) => sum + (s.paid ? 0 : parseNumber(s.amount)),
+        (sum, s) => sum + (s.paid ? 0 : parseFloat(s.amount || 0)),
         0
       );
-      // المتبقي يُحسب دائماً من الأقساط غير المسددة لضمان أحدث قيمة
-      const remaining = unpaidTotal;
-
       return {
         loanId: loan.loanId,
         employeeId: loan.employeeId,
         employeeName: getEmployeeName(loan.employeeId),
-        amount: parseNumber(loan.amount),
-        remainingAmount: Number.isFinite(remaining) ? remaining : 0,
+        amount: Number(loan.amount || 0),
+        remainingAmount:
+          loan.remainingAmount !== undefined ? Number(loan.remainingAmount) : Number(unpaidTotal),
         issuedDate: loan.issuedDate || '',
         repaymentType: loan.repaymentType || '',
         notes: loan.notes || '',
         scheduleJson: JSON.stringify(scheduleArr),
       };
     });
-
-  const detailsHeader = [
-    'loanId',
-    'employeeId',
-    'employeeName',
-    'amount',
-    'remainingAmount',
-    'issuedDate',
-    'repaymentType',
-    'notes',
-    'scheduleJson',
-  ];
-
-  const buildLoanSummary = () =>
-    groupedLoans.map((g) => ({
-      employeeId: g.employeeId,
-      employeeName: getEmployeeName(g.employeeId),
-      loansCount: g.loansCount,
-      totalAmount: Number(g.totalAmount || 0),
-      totalRemaining: Number(g.totalRemaining || 0),
-      lastIssuedDate: g.lastIssuedDate || '',
-    }));
-
-  const summaryHeader = [
-    'employeeId',
-    'employeeName',
-    'loansCount',
-    'totalAmount',
-    'totalRemaining',
-    'lastIssuedDate',
-  ];
-
-  const handleExport = () => {
-    if (loansData.length === 0) {
-      showToast('لا توجد بيانات للتصدير', 'error');
-      return;
-    }
-    // ملف واحد يحتوي ملخص وتجميع + التفاصيل الكاملة
-    // ضع شيت التفاصيل أولاً (حتى يتمكن الاستيراد من قراءة الشيت الأول مباشرة)
-    exportWorkbook(
-      [
-        {
-          data: buildLoanDetails(),
-          sheetName: 'loans',
-          header: detailsHeader,
-        },
-        {
-          data: buildLoanSummary(),
-          sheetName: 'loans_summary',
-          header: summaryHeader,
-        },
-      ],
-      'erp_export_loans.xlsx'
-    );
-    showToast('تم تصدير الملخص والتفاصيل بنجاح');
+    exportToExcel(exportData, 'loans', 'erp_export_loans.xlsx');
+    showToast('تم تصدير البيانات بنجاح');
   };
 
   const parseNumber = (val) => {
@@ -431,37 +375,48 @@ export function Loans() {
     { key: 'lastIssuedDate', label: 'آخر إصدار' },
   ];
 
+  if (!permissions.view) {
+    return (
+      <div className="space-y-6">
+        <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-3 rounded-lg">
+          ليس لديك صلاحية لعرض هذه الصفحة
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <div>
-          <h2 className="text-3xl font-bold text-gray-800">قسم السلف</h2>
-          <p className="text-sm text-gray-600 mt-1">
-            إجمالي السلف للشهر الحالي: <span className="font-semibold text-emerald-600">{currentMonthTotal.toFixed(2)} ج.م</span>
-          </p>
-        </div>
+        <h2 className="text-3xl font-bold text-gray-800">قسم السلف</h2>
         <div className="flex gap-3">
-          <button
-            onClick={handleExport}
-            className="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors"
-          >
-            تصدير Excel
-          </button>
-          <button
-            onClick={() => setIsImportModalOpen(true)}
-            className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
-          >
-            استيراد Excel
-          </button>
-          <button
-            onClick={() => {
-              resetForm();
-              setIsModalOpen(true);
-            }}
-            className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
-          >
-            إصدار سلفة جديدة
-          </button>
+          {permissions.view && (
+            <button
+              onClick={handleExport}
+              className="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors"
+            >
+              تصدير Excel
+            </button>
+          )}
+          {permissions.create && (
+            <>
+              <button
+                onClick={() => setIsImportModalOpen(true)}
+                className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
+              >
+                استيراد Excel
+              </button>
+              <button
+                onClick={() => {
+                  resetForm();
+                  setIsModalOpen(true);
+                }}
+                className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
+              >
+                إصدار سلفة جديدة
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -469,6 +424,8 @@ export function Loans() {
         data={groupedLoans}
         columns={columns}
         onView={handleView}
+        onEdit={permissions.edit ? handleEdit : null}
+        onDelete={permissions.delete ? handleDelete : null}
         searchFields={['employeeId']}
       />
 
@@ -618,7 +575,11 @@ export function Loans() {
         onClose={() => setIsDeleteModalOpen(false)}
         onConfirm={confirmDelete}
         title="تأكيد الحذف"
-        message={`هل أنت متأكد من حذف السلفة "${itemToDelete?.loanId}"؟`}
+        message={itemToDelete?.loanId 
+          ? `هل أنت متأكد من حذف السلفة "${itemToDelete.loanId}"؟`
+          : itemToDelete?.employeeId
+          ? `هل أنت متأكد من حذف جميع سلف الموظف "${getEmployeeName(itemToDelete.employeeId)}" (${itemToDelete.loansCount || 0} سلفة)؟`
+          : 'هل أنت متأكد من الحذف؟'}
         confirmText="حذف"
         cancelText="إلغاء"
         danger
@@ -646,6 +607,7 @@ export function Loans() {
         onEdit={handleEdit}
         onDelete={handleDelete}
         loansData={loansData}
+        permissions={permissions}
       />
 
       <ImportModal
@@ -710,7 +672,7 @@ function PaymentModal({ isOpen, onClose, onConfirm, loan }) {
   );
 }
 
-function ViewModal({ isOpen, onClose, loanGroup, getEmployeeName, onPay, onEdit, onDelete, loansData = [] }) {
+function ViewModal({ isOpen, onClose, loanGroup, getEmployeeName, onPay, onEdit, onDelete, loansData = [], permissions = {} }) {
   if (!loanGroup) return null;
 
   const employeeLoans = loansData.filter((l) => l.employeeId === loanGroup.employeeId);
@@ -766,7 +728,7 @@ function ViewModal({ isOpen, onClose, loanGroup, getEmployeeName, onPay, onEdit,
                       <td className="px-3 py-2">{loan.repaymentType}</td>
                       <td className="px-3 py-2">
                         <div className="flex gap-2">
-                          {onPay && (
+                          {onPay && permissions.edit && (
                             <button
                               onClick={() => onPay(loan)}
                               className="min-w-[70px] px-3 py-1 bg-amber-500 text-white rounded-lg hover:bg-amber-600 text-xs"
@@ -774,7 +736,7 @@ function ViewModal({ isOpen, onClose, loanGroup, getEmployeeName, onPay, onEdit,
                               سداد
                             </button>
                           )}
-                          {onEdit && (
+                          {onEdit && permissions.edit && (
                             <button
                               onClick={() => onEdit(loan)}
                               className="min-w-[70px] px-3 py-1 bg-sky-600 text-white rounded-lg hover:bg-sky-700 text-xs"
@@ -782,7 +744,7 @@ function ViewModal({ isOpen, onClose, loanGroup, getEmployeeName, onPay, onEdit,
                               تعديل
                             </button>
                           )}
-                          {onDelete && (
+                          {onDelete && permissions.delete && (
                             <button
                               onClick={() => onDelete(loan)}
                               className="min-w-[70px] px-3 py-1 bg-rose-600 text-white rounded-lg hover:bg-rose-700 text-xs"
@@ -861,8 +823,7 @@ function ImportModal({ isOpen, onClose, onImport }) {
     importFromExcel(
       file,
       (data) => onImport(data, mode),
-      (error) => console.error('Import error:', error),
-      'loans' // نقرأ شيت التفاصيل مباشرة
+      (error) => console.error('Import error:', error)
     );
   };
 

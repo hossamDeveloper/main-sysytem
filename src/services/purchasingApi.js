@@ -471,21 +471,683 @@ export const purchasingApi = {
     return { success: true };
   },
 
+  // ========== Products ==========
+  getProducts: async (params = {}) => {
+    await delay(500);
+    const products = getStoredData('products');
+    let filtered = [...products];
+
+    if (params.search) {
+      const searchTerm = params.search.toLowerCase();
+      filtered = filtered.filter(
+        (p) =>
+          p.name?.toLowerCase().includes(searchTerm) ||
+          p.category?.toLowerCase().includes(searchTerm)
+      );
+    }
+
+    if (params.category) {
+      filtered = filtered.filter((p) => p.category === params.category);
+    }
+
+    const page = params.page || 1;
+    const limit = params.limit || 10;
+    const start = (page - 1) * limit;
+    const end = start + limit;
+
+    return {
+      data: filtered.slice(start, end),
+      total: filtered.length,
+      page,
+      limit,
+      totalPages: Math.ceil(filtered.length / limit),
+    };
+  },
+
+  getProduct: async (id) => {
+    await delay(300);
+    const products = getStoredData('products');
+    const product = products.find((p) => p.id === id);
+    if (!product) {
+      throw new Error('Product not found');
+    }
+    return product;
+  },
+
+  createProduct: async (productData) => {
+    await delay(800);
+    const products = getStoredData('products');
+    const newProduct = {
+      id: generateId('PROD'),
+      ...productData,
+      createdAt: new Date().toISOString(),
+    };
+    products.push(newProduct);
+    saveData('products', products);
+    return newProduct;
+  },
+
+  updateProduct: async (id, productData) => {
+    await delay(800);
+    const products = getStoredData('products');
+    const index = products.findIndex((p) => p.id === id);
+    if (index === -1) {
+      throw new Error('Product not found');
+    }
+    products[index] = {
+      ...products[index],
+      ...productData,
+      updatedAt: new Date().toISOString(),
+    };
+    saveData('products', products);
+    return products[index];
+  },
+
+  deleteProduct: async (id) => {
+    await delay(500);
+    const products = getStoredData('products');
+    const filtered = products.filter((p) => p.id !== id);
+    if (filtered.length === products.length) {
+      throw new Error('Product not found');
+    }
+    saveData('products', filtered);
+    return { success: true };
+  },
+
+  // ========== Supplier Products ==========
+  getSupplierProducts: async (supplierId, params = {}) => {
+    await delay(500);
+    const supplierProducts = getStoredData('supplierProducts');
+    let filtered = supplierProducts.filter((sp) => sp.supplierId === supplierId);
+
+    if (params.search) {
+      const searchTerm = params.search.toLowerCase();
+      const products = getStoredData('products');
+      filtered = filtered.filter((sp) => {
+        const product = products.find((p) => p.id === sp.productId);
+        return product?.name?.toLowerCase().includes(searchTerm);
+      });
+    }
+
+    const page = params.page || 1;
+    const limit = params.limit || 10;
+    const start = (page - 1) * limit;
+    const end = start + limit;
+
+    return {
+      data: filtered.slice(start, end),
+      total: filtered.length,
+      page,
+      limit,
+      totalPages: Math.ceil(filtered.length / limit),
+    };
+  },
+
+  getProductSuppliers: async (productId) => {
+    await delay(500);
+    const supplierProducts = getStoredData('supplierProducts');
+    const suppliers = getStoredData('suppliers');
+    const products = getStoredData('products');
+    
+    const product = products.find((p) => p.id === productId);
+    const relatedSPs = supplierProducts.filter((sp) => sp.productId === productId);
+    
+    const result = relatedSPs.map((sp) => {
+      const supplier = suppliers.find((s) => s.id === sp.supplierId);
+      return {
+        ...sp,
+        supplierName: supplier?.name,
+        productName: product?.name,
+      };
+    });
+
+    const prices = result.map((r) => parseFloat(r.price) || 0);
+    return {
+      suppliers: result,
+      minPrice: prices.length > 0 ? Math.min(...prices) : 0,
+      maxPrice: prices.length > 0 ? Math.max(...prices) : 0,
+      avgPrice:
+        prices.length > 0
+          ? prices.reduce((sum, p) => sum + p, 0) / prices.length
+          : 0,
+    };
+  },
+
+  createSupplierProduct: async (supplierProductData) => {
+    await delay(800);
+    const supplierProducts = getStoredData('supplierProducts');
+    const existing = supplierProducts.find(
+      (sp) =>
+        sp.supplierId === supplierProductData.supplierId &&
+        sp.productId === supplierProductData.productId
+    );
+    if (existing) {
+      throw new Error('This product already exists for this supplier');
+    }
+    const newSP = {
+      id: generateId('SUPPROD'),
+      ...supplierProductData,
+      price: parseFloat(supplierProductData.price) || 0,
+      createdAt: new Date().toISOString(),
+    };
+    supplierProducts.push(newSP);
+    saveData('supplierProducts', supplierProducts);
+    return newSP;
+  },
+
+  updateSupplierProduct: async (id, supplierProductData) => {
+    await delay(800);
+    const supplierProducts = getStoredData('supplierProducts');
+    const index = supplierProducts.findIndex((sp) => sp.id === id);
+    if (index === -1) {
+      throw new Error('Supplier Product not found');
+    }
+    supplierProducts[index] = {
+      ...supplierProducts[index],
+      ...supplierProductData,
+      price: parseFloat(supplierProductData.price) || supplierProducts[index].price,
+      updatedAt: new Date().toISOString(),
+    };
+    saveData('supplierProducts', supplierProducts);
+    return supplierProducts[index];
+  },
+
+  deleteSupplierProduct: async (id) => {
+    await delay(500);
+    const supplierProducts = getStoredData('supplierProducts');
+    const filtered = supplierProducts.filter((sp) => sp.id !== id);
+    if (filtered.length === supplierProducts.length) {
+      throw new Error('Supplier Product not found');
+    }
+    saveData('supplierProducts', filtered);
+    return { success: true };
+  },
+
+  // ========== Standard Prices ==========
+  getStandardPrices: async (params = {}) => {
+    await delay(500);
+    const standardPrices = getStoredData('standardPrices');
+    let filtered = [...standardPrices];
+
+    if (params.search) {
+      const searchTerm = params.search.toLowerCase();
+      const products = getStoredData('products');
+      filtered = filtered.filter((sp) => {
+        const product = products.find((p) => p.id === sp.productId);
+        return product?.name?.toLowerCase().includes(searchTerm);
+      });
+    }
+
+    const page = params.page || 1;
+    const limit = params.limit || 10;
+    const start = (page - 1) * limit;
+    const end = start + limit;
+
+    return {
+      data: filtered.slice(start, end),
+      total: filtered.length,
+      page,
+      limit,
+      totalPages: Math.ceil(filtered.length / limit),
+    };
+  },
+
+  getStandardPrice: async (productId) => {
+    await delay(300);
+    const standardPrices = getStoredData('standardPrices');
+    return standardPrices.find((sp) => sp.productId === productId) || null;
+  },
+
+  createOrUpdateStandardPrice: async (standardPriceData) => {
+    await delay(800);
+    const standardPrices = getStoredData('standardPrices');
+    const existingIndex = standardPrices.findIndex(
+      (sp) => sp.productId === standardPriceData.productId
+    );
+
+    const standardPrice = {
+      id: existingIndex >= 0 ? standardPrices[existingIndex].id : generateId('STD'),
+      productId: standardPriceData.productId,
+      price: parseFloat(standardPriceData.price) || 0,
+      calculationMethod: standardPriceData.calculationMethod || 'manual',
+      allowedVariance: parseFloat(standardPriceData.allowedVariance) || 0,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (existingIndex >= 0) {
+      standardPrices[existingIndex] = standardPrice;
+    } else {
+      standardPrice.createdAt = new Date().toISOString();
+      standardPrices.push(standardPrice);
+    }
+
+    saveData('standardPrices', standardPrices);
+    return standardPrice;
+  },
+
+  // ========== Custodies ==========
+  getCustodies: async (params = {}) => {
+    await delay(500);
+    const custodies = getStoredData('custodies');
+    let filtered = [...custodies];
+
+    if (params.search) {
+      const searchTerm = params.search.toLowerCase();
+      filtered = filtered.filter(
+        (c) =>
+          c.custodyNumber?.toLowerCase().includes(searchTerm) ||
+          c.title?.toLowerCase().includes(searchTerm) ||
+          c.employeeName?.toLowerCase().includes(searchTerm)
+      );
+    }
+
+    if (params.status) {
+      filtered = filtered.filter((c) => c.status === params.status);
+    }
+
+    if (params.employeeId) {
+      filtered = filtered.filter((c) => c.employeeId === params.employeeId);
+    }
+
+    if (params.dateFrom) {
+      filtered = filtered.filter((c) => c.issueDate >= params.dateFrom);
+    }
+
+    if (params.dateTo) {
+      filtered = filtered.filter((c) => c.issueDate <= params.dateTo);
+    }
+
+    const page = params.page || 1;
+    const limit = params.limit || 10;
+    const start = (page - 1) * limit;
+    const end = start + limit;
+
+    return {
+      data: filtered.slice(start, end),
+      total: filtered.length,
+      page,
+      limit,
+      totalPages: Math.ceil(filtered.length / limit),
+    };
+  },
+
+  getCustody: async (id) => {
+    await delay(300);
+    const custodies = getStoredData('custodies');
+    const custody = custodies.find((c) => c.id === id);
+    if (!custody) {
+      throw new Error('Custody not found');
+    }
+    return custody;
+  },
+
+  createCustody: async (custodyData) => {
+    await delay(800);
+    const custodies = getStoredData('custodies');
+    const custodyNumber = `CST-${new Date().getFullYear()}-${String(custodies.length + 1).padStart(4, '0')}`;
+    const newCustody = {
+      id: generateId('CST'),
+      custodyNumber,
+      ...custodyData,
+      amount: parseFloat(custodyData.amount) || 0,
+      status: 'Issued',
+      issueDate: custodyData.issueDate || new Date().toISOString().split('T')[0],
+      createdAt: new Date().toISOString(),
+    };
+    custodies.push(newCustody);
+    saveData('custodies', custodies);
+    return newCustody;
+  },
+
+  updateCustody: async (id, custodyData) => {
+    await delay(800);
+    const custodies = getStoredData('custodies');
+    const index = custodies.findIndex((c) => c.id === id);
+    if (index === -1) {
+      throw new Error('Custody not found');
+    }
+    custodies[index] = {
+      ...custodies[index],
+      ...custodyData,
+      amount: custodyData.amount !== undefined ? parseFloat(custodyData.amount) : custodies[index].amount,
+      updatedAt: new Date().toISOString(),
+    };
+    saveData('custodies', custodies);
+    return custodies[index];
+  },
+
+  closeCustody: async (id) => {
+    await delay(500);
+    const custodies = getStoredData('custodies');
+    const index = custodies.findIndex((c) => c.id === id);
+    if (index === -1) {
+      throw new Error('Custody not found');
+    }
+    custodies[index].status = 'Closed';
+    custodies[index].closedAt = new Date().toISOString();
+    saveData('custodies', custodies);
+    return custodies[index];
+  },
+
+  // ========== Custody Clearance ==========
+  getCustodyClearances: async (params = {}) => {
+    await delay(500);
+    const clearances = getStoredData('custodyClearances');
+    let filtered = [...clearances];
+
+    if (params.search) {
+      const searchTerm = params.search.toLowerCase();
+      filtered = filtered.filter(
+        (cc) =>
+          cc.clearanceNumber?.toLowerCase().includes(searchTerm) ||
+          cc.custodyNumber?.toLowerCase().includes(searchTerm)
+      );
+    }
+
+    if (params.status) {
+      filtered = filtered.filter((cc) => cc.status === params.status);
+    }
+
+    if (params.custodyId) {
+      filtered = filtered.filter((cc) => cc.custodyId === params.custodyId);
+    }
+
+    const page = params.page || 1;
+    const limit = params.limit || 10;
+    const start = (page - 1) * limit;
+    const end = start + limit;
+
+    return {
+      data: filtered.slice(start, end),
+      total: filtered.length,
+      page,
+      limit,
+      totalPages: Math.ceil(filtered.length / limit),
+    };
+  },
+
+  getCustodyClearance: async (id) => {
+    await delay(300);
+    const clearances = getStoredData('custodyClearances');
+    const clearance = clearances.find((cc) => cc.id === id);
+    if (!clearance) {
+      throw new Error('Custody Clearance not found');
+    }
+    return clearance;
+  },
+
+  createCustodyClearance: async (clearanceData) => {
+    await delay(800);
+    const clearances = getStoredData('custodyClearances');
+    const clearanceNumber = `CC-${new Date().getFullYear()}-${String(clearances.length + 1).padStart(4, '0')}`;
+    
+    // Calculate totals and price comparisons
+    const items = clearanceData.items || [];
+    const processedItems = items.map((item) => {
+      const supplierProduct = getStoredData('supplierProducts').find(
+        (sp) => sp.id === item.supplierProductId
+      );
+      const standardPrice = getStoredData('standardPrices').find(
+        (sp) => sp.productId === item.productId
+      );
+
+      const enteredPrice = parseFloat(item.price) || 0;
+      const supplierPrice = parseFloat(supplierProduct?.price) || 0;
+      const standardPriceValue = parseFloat(standardPrice?.price) || 0;
+      const quantity = parseFloat(item.quantity) || 0;
+      const total = enteredPrice * quantity;
+
+      const priceDiffFromSupplier = enteredPrice - supplierPrice;
+      const priceDiffFromStandard = enteredPrice - standardPriceValue;
+      const priceDiffPercentFromSupplier =
+        supplierPrice > 0 ? ((priceDiffFromSupplier / supplierPrice) * 100).toFixed(2) : 0;
+      const priceDiffPercentFromStandard =
+        standardPriceValue > 0 ? ((priceDiffFromStandard / standardPriceValue) * 100).toFixed(2) : 0;
+
+      // Check variance
+      const allowedVariance = parseFloat(standardPrice?.allowedVariance) || 0;
+      const isWithinVariance = Math.abs(parseFloat(priceDiffPercentFromStandard)) <= allowedVariance;
+      const needsApproval = !isWithinVariance || enteredPrice > supplierPrice;
+
+      return {
+        ...item,
+        productId: item.productId,
+        supplierId: item.supplierId,
+        supplierProductId: item.supplierProductId,
+        quantity,
+        price: enteredPrice,
+        total,
+        supplierPrice,
+        standardPrice: standardPriceValue,
+        priceDiffFromSupplier,
+        priceDiffFromStandard,
+        priceDiffPercentFromSupplier: parseFloat(priceDiffPercentFromSupplier),
+        priceDiffPercentFromStandard: parseFloat(priceDiffPercentFromStandard),
+        isWithinVariance,
+        needsApproval,
+        itemStatus: 'Pending',
+      };
+    });
+
+    const totalAmount = processedItems.reduce((sum, item) => sum + (item.total || 0), 0);
+
+    const newClearance = {
+      id: generateId('CC'),
+      clearanceNumber,
+      custodyId: clearanceData.custodyId,
+      clearanceDate: clearanceData.clearanceDate || new Date().toISOString().split('T')[0],
+      items: processedItems,
+      totalAmount,
+      status: 'Draft',
+      notes: clearanceData.notes || '',
+      createdAt: new Date().toISOString(),
+    };
+
+    clearances.push(newClearance);
+    saveData('custodyClearances', clearances);
+    return newClearance;
+  },
+
+  updateCustodyClearance: async (id, clearanceData) => {
+    await delay(800);
+    const clearances = getStoredData('custodyClearances');
+    const index = clearances.findIndex((cc) => cc.id === id);
+    if (index === -1) {
+      throw new Error('Custody Clearance not found');
+    }
+
+    // Recalculate if items changed
+    if (clearanceData.items) {
+      const items = clearanceData.items;
+      const processedItems = items.map((item) => {
+        const supplierProduct = getStoredData('supplierProducts').find(
+          (sp) => sp.id === item.supplierProductId
+        );
+        const standardPrice = getStoredData('standardPrices').find(
+          (sp) => sp.productId === item.productId
+        );
+
+        const enteredPrice = parseFloat(item.price) || 0;
+        const supplierPrice = parseFloat(supplierProduct?.price) || 0;
+        const standardPriceValue = parseFloat(standardPrice?.price) || 0;
+        const quantity = parseFloat(item.quantity) || 0;
+        const total = enteredPrice * quantity;
+
+        const priceDiffFromSupplier = enteredPrice - supplierPrice;
+        const priceDiffFromStandard = enteredPrice - standardPriceValue;
+        const priceDiffPercentFromSupplier =
+          supplierPrice > 0 ? ((priceDiffFromSupplier / supplierPrice) * 100).toFixed(2) : 0;
+        const priceDiffPercentFromStandard =
+          standardPriceValue > 0 ? ((priceDiffFromStandard / standardPriceValue) * 100).toFixed(2) : 0;
+
+        const allowedVariance = parseFloat(standardPrice?.allowedVariance) || 0;
+        const isWithinVariance = Math.abs(parseFloat(priceDiffPercentFromStandard)) <= allowedVariance;
+        const needsApproval = !isWithinVariance || enteredPrice > supplierPrice;
+
+        return {
+          ...item,
+          quantity,
+          price: enteredPrice,
+          total,
+          supplierPrice,
+          standardPrice: standardPriceValue,
+          priceDiffFromSupplier,
+          priceDiffFromStandard,
+          priceDiffPercentFromSupplier: parseFloat(priceDiffPercentFromSupplier),
+          priceDiffPercentFromStandard: parseFloat(priceDiffPercentFromStandard),
+          isWithinVariance,
+          needsApproval,
+          itemStatus: item.itemStatus || 'Pending',
+        };
+      });
+
+      const totalAmount = processedItems.reduce((sum, item) => sum + (item.total || 0), 0);
+      clearanceData.items = processedItems;
+      clearanceData.totalAmount = totalAmount;
+    }
+
+    clearances[index] = {
+      ...clearances[index],
+      ...clearanceData,
+      updatedAt: new Date().toISOString(),
+    };
+    saveData('custodyClearances', clearances);
+    return clearances[index];
+  },
+
+  approveClearanceItem: async (clearanceId, itemId, approvedPrice = null) => {
+    await delay(500);
+    const clearances = getStoredData('custodyClearances');
+    const clearance = clearances.find((cc) => cc.id === clearanceId);
+    if (!clearance) {
+      throw new Error('Custody Clearance not found');
+    }
+
+    const item = clearance.items.find((item) => item.id === itemId);
+    if (!item) {
+      throw new Error('Item not found');
+    }
+
+    if (approvedPrice !== null) {
+      item.price = parseFloat(approvedPrice);
+      item.total = item.price * item.quantity;
+      // Recalculate differences
+      item.priceDiffFromSupplier = item.price - item.supplierPrice;
+      item.priceDiffFromStandard = item.price - item.standardPrice;
+    }
+
+    item.itemStatus = 'Approved';
+    item.approvedAt = new Date().toISOString();
+
+    saveData('custodyClearances', clearances);
+    return clearance;
+  },
+
+  rejectClearanceItem: async (clearanceId, itemId, reason = '') => {
+    await delay(500);
+    const clearances = getStoredData('custodyClearances');
+    const clearance = clearances.find((cc) => cc.id === clearanceId);
+    if (!clearance) {
+      throw new Error('Custody Clearance not found');
+    }
+
+    const item = clearance.items.find((item) => item.id === itemId);
+    if (!item) {
+      throw new Error('Item not found');
+    }
+
+    item.itemStatus = 'Rejected';
+    item.rejectionReason = reason;
+    item.rejectedAt = new Date().toISOString();
+
+    saveData('custodyClearances', clearances);
+    return clearance;
+  },
+
+  submitCustodyClearance: async (id) => {
+    await delay(500);
+    const clearances = getStoredData('custodyClearances');
+    const index = clearances.findIndex((cc) => cc.id === id);
+    if (index === -1) {
+      throw new Error('Custody Clearance not found');
+    }
+    clearances[index].status = 'Under Review';
+    saveData('custodyClearances', clearances);
+    return clearances[index];
+  },
+
+  approveCustodyClearance: async (id) => {
+    await delay(500);
+    const clearances = getStoredData('custodyClearances');
+    const index = clearances.findIndex((cc) => cc.id === id);
+    if (index === -1) {
+      throw new Error('Custody Clearance not found');
+    }
+    clearances[index].status = 'Approved';
+    clearances[index].approvedAt = new Date().toISOString();
+    saveData('custodyClearances', clearances);
+    return clearances[index];
+  },
+
+  rejectCustodyClearance: async (id, reason = '') => {
+    await delay(500);
+    const clearances = getStoredData('custodyClearances');
+    const index = clearances.findIndex((cc) => cc.id === id);
+    if (index === -1) {
+      throw new Error('Custody Clearance not found');
+    }
+    clearances[index].status = 'Rejected';
+    clearances[index].rejectionReason = reason;
+    clearances[index].rejectedAt = new Date().toISOString();
+    saveData('custodyClearances', clearances);
+    return clearances[index];
+  },
+
   // ========== Dashboard Stats ==========
   getDashboardStats: async () => {
     await delay(500);
     const suppliers = getStoredData('suppliers');
-    const prs = getStoredData('purchaseRequests');
-    const pos = getStoredData('purchaseOrders');
-    const invoices = getStoredData('invoices');
+    const custodies = getStoredData('custodies');
+    const clearances = getStoredData('custodyClearances');
+    const products = getStoredData('products');
+    const standardPrices = getStoredData('standardPrices');
+
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    const currentMonthCustodies = custodies.filter((c) => c.issueDate?.startsWith(currentMonth));
+    const currentMonthClearances = clearances.filter((c) =>
+      c.clearanceDate?.startsWith(currentMonth)
+    );
+
+    const totalIssuedThisMonth = currentMonthCustodies.reduce(
+      (sum, c) => sum + (parseFloat(c.amount) || 0),
+      0
+    );
+    const totalClearedThisMonth = currentMonthClearances
+      .filter((c) => c.status === 'Approved')
+      .reduce((sum, c) => sum + (parseFloat(c.totalAmount) || 0), 0);
+
+    const openCustodies = custodies.filter((c) => c.status === 'Issued').length;
+
+    // Price variance alerts
+    const varianceAlerts = clearances.filter((cc) => {
+      return cc.items?.some(
+        (item) =>
+          item.needsApproval &&
+          (item.itemStatus === 'Pending' || item.itemStatus === 'Under Review')
+      );
+    }).length;
 
     return {
       totalSuppliers: suppliers.filter((s) => s.status === 'Active').length,
-      openPRs: prs.filter((pr) => ['Draft', 'Submitted'].includes(pr.status)).length,
-      openPOs: pos.filter((po) => ['Open', 'Partially Received'].includes(po.status)).length,
-      pendingInvoices: invoices.filter(
-        (inv) => ['Unpaid', 'Partially Paid'].includes(inv.paymentStatus)
-      ).length,
+      totalProducts: products.length,
+      totalStandardPrices: standardPrices.length,
+      totalIssuedThisMonth: totalIssuedThisMonth.toFixed(2),
+      totalClearedThisMonth: totalClearedThisMonth.toFixed(2),
+      openCustodies,
+      priceVarianceAlerts: varianceAlerts,
+      openPRs: 0, // Deprecated
+      openPOs: 0, // Deprecated
+      pendingInvoices: 0, // Deprecated
     };
   },
 };

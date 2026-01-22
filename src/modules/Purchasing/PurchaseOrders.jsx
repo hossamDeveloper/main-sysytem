@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   usePurchaseOrders,
-  usePurchaseRequests,
   useSuppliers,
+  useCustodies,
   useCreatePurchaseOrder,
   useUpdatePurchaseOrder,
   useDeletePurchaseOrder,
@@ -29,7 +29,7 @@ export function PurchaseOrders() {
 
   const { data, isLoading } = usePurchaseOrders({ page, limit: 10, search, status: statusFilter });
   const { data: suppliersData } = useSuppliers({ limit: 1000 });
-  const { data: prsData } = usePurchaseRequests({ limit: 1000, status: 'Approved' });
+  const { data: openCustodiesData } = useCustodies({ limit: 1000, status: 'Issued' });
   const createMutation = useCreatePurchaseOrder();
   const updateMutation = useUpdatePurchaseOrder();
   const deleteMutation = useDeletePurchaseOrder();
@@ -37,7 +37,8 @@ export function PurchaseOrders() {
   const [formData, setFormData] = useState({
     supplierId: '',
     supplierName: '',
-    prId: '',
+    responsibleEmployeeId: '',
+    responsibleEmployeeName: '',
     deliveryDate: '',
     paymentTerms: '',
     status: 'Open',
@@ -56,6 +57,7 @@ export function PurchaseOrders() {
   const validateForm = () => {
     const errors = {};
     if (!formData.supplierId) errors.supplierId = 'المورد مطلوب';
+    if (!formData.responsibleEmployeeId) errors.responsibleEmployeeId = 'الموظف المسؤول مطلوب';
     if (!formData.deliveryDate) errors.deliveryDate = 'تاريخ التسليم مطلوب';
     if (!formData.paymentTerms) errors.paymentTerms = 'شروط الدفع مطلوبة';
     if (formData.items.length === 0) errors.items = 'يجب إضافة عنصر واحد على الأقل';
@@ -67,7 +69,8 @@ export function PurchaseOrders() {
     setFormData({
       supplierId: '',
       supplierName: '',
-      prId: '',
+      responsibleEmployeeId: '',
+      responsibleEmployeeName: '',
       deliveryDate: '',
       paymentTerms: '',
       status: 'Open',
@@ -88,20 +91,33 @@ export function PurchaseOrders() {
     });
   };
 
-  const handlePRChange = (prId) => {
-    const pr = prsData?.data?.find((p) => p.id === prId);
-    if (pr) {
-      setFormData({
-        ...formData,
-        prId,
-        items: pr.items.map((item, idx) => ({
-          id: Date.now() + idx,
-          itemName: item.itemName,
-          quantity: item.quantity,
-          price: item.estimatedPrice,
-        })),
-      });
+  const responsibleEmployees = useMemo(() => {
+    const openCustodies = openCustodiesData?.data || [];
+    const byEmployeeId = new Map();
+    for (const c of openCustodies) {
+      if (!c?.employeeId) continue;
+      const prev = byEmployeeId.get(c.employeeId) || {
+        employeeId: c.employeeId,
+        employeeName: c.employeeName || c.employeeId,
+        openCustodiesCount: 0,
+        openCustodiesAmount: 0,
+      };
+      prev.openCustodiesCount += 1;
+      prev.openCustodiesAmount += parseFloat(c.amount) || 0;
+      byEmployeeId.set(c.employeeId, prev);
     }
+    return Array.from(byEmployeeId.values()).sort((a, b) =>
+      String(a.employeeName || '').localeCompare(String(b.employeeName || ''))
+    );
+  }, [openCustodiesData?.data]);
+
+  const handleResponsibleEmployeeChange = (employeeId) => {
+    const emp = responsibleEmployees.find((e) => e.employeeId === employeeId);
+    setFormData({
+      ...formData,
+      responsibleEmployeeId: employeeId,
+      responsibleEmployeeName: emp?.employeeName || '',
+    });
   };
 
   const handleAddItem = () => {
@@ -141,7 +157,8 @@ export function PurchaseOrders() {
     setFormData({
       supplierId: po.supplierId || '',
       supplierName: po.supplierName || '',
-      prId: po.prId || '',
+      responsibleEmployeeId: po.responsibleEmployeeId || '',
+      responsibleEmployeeName: po.responsibleEmployeeName || '',
       deliveryDate: po.deliveryDate || '',
       paymentTerms: po.paymentTerms || '',
       status: po.status || 'Open',
@@ -443,20 +460,26 @@ export function PurchaseOrders() {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                طلب الشراء (اختياري)
+                الموظف المسؤول (لديه عهد مفتوحة) <span className="text-red-500">*</span>
               </label>
               <select
-                value={formData.prId}
-                onChange={(e) => handlePRChange(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-sky-500"
+                value={formData.responsibleEmployeeId}
+                onChange={(e) => handleResponsibleEmployeeChange(e.target.value)}
+                className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-sky-500 ${
+                  formErrors.responsibleEmployeeId ? 'border-red-500' : 'border-gray-300'
+                }`}
               >
-                <option value="">اختر طلب شراء</option>
-                {prsData?.data?.map((pr) => (
-                  <option key={pr.id} value={pr.id}>
-                    {pr.prNumber} - {pr.department}
+                <option value="">اختر موظف</option>
+                {responsibleEmployees.map((emp) => (
+                  <option key={emp.employeeId} value={emp.employeeId}>
+                    {emp.employeeName} — عهد مفتوحة: {emp.openCustodiesCount} — إجمالي:{' '}
+                    {emp.openCustodiesAmount.toFixed(2)}
                   </option>
                 ))}
               </select>
+              {formErrors.responsibleEmployeeId && (
+                <p className="mt-1 text-sm text-red-600">{formErrors.responsibleEmployeeId}</p>
+              )}
             </div>
 
             <div>
@@ -643,6 +666,12 @@ export function PurchaseOrders() {
               <div>
                 <label className="text-sm font-medium text-gray-600">المورد</label>
                 <p className="text-gray-800">{viewingPO.supplierName}</p>
+              </div>
+              <div>
+                <label className="text-sm font-medium text-gray-600">الموظف المسؤول</label>
+                <p className="text-gray-800">
+                  {viewingPO.responsibleEmployeeName || viewingPO.responsibleEmployeeId || '-'}
+                </p>
               </div>
               <div>
                 <label className="text-sm font-medium text-gray-600">تاريخ التسليم</label>

@@ -4,6 +4,11 @@ import {
   useCreateSupplier,
   useUpdateSupplier,
   useDeleteSupplier,
+  useSupplierProducts,
+  useProducts,
+  useCreateSupplierProduct,
+  useUpdateSupplierProduct,
+  useDeleteSupplierProduct,
 } from '../../services/purchasingQueries';
 import { Modal } from '../../components/Modal';
 import { ConfirmModal } from '../../components/ConfirmModal';
@@ -17,9 +22,31 @@ export function Suppliers() {
   const [statusFilter, setStatusFilter] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isProductsModalOpen, setIsProductsModalOpen] = useState(false);
+  const [isDeleteProductModalOpen, setIsDeleteProductModalOpen] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState(null);
+  const [selectedSupplier, setSelectedSupplier] = useState(null);
   const [itemToDelete, setItemToDelete] = useState(null);
+  const [productToDelete, setProductToDelete] = useState(null);
+  const [editingProduct, setEditingProduct] = useState(null);
   const [toast, setToast] = useState(null);
+
+  // Products management
+  const { data: productsData } = useProducts({ limit: 1000 });
+  const { data: supplierProductsData, isLoading: loadingProducts } = useSupplierProducts(
+    selectedSupplier?.id,
+    { limit: 1000 }
+  );
+  const createProductMutation = useCreateSupplierProduct();
+  const updateProductMutation = useUpdateSupplierProduct();
+  const deleteProductMutation = useDeleteSupplierProduct();
+
+  const [productFormData, setProductFormData] = useState({
+    productId: '',
+    price: '',
+  });
+
+  const [productFormErrors, setProductFormErrors] = useState({});
 
   const { data, isLoading } = useSuppliers({ page, limit: 10, search, status: statusFilter });
   const createMutation = useCreateSupplier();
@@ -120,6 +147,82 @@ export function Suppliers() {
         showToast('تم حذف المورد بنجاح');
         setItemToDelete(null);
         setIsDeleteModalOpen(false);
+      } catch (error) {
+        showToast(error.message || 'حدث خطأ أثناء الحذف', 'error');
+      }
+    }
+  };
+
+  // Products management functions
+  const handleOpenProducts = (supplier) => {
+    setSelectedSupplier(supplier);
+    setIsProductsModalOpen(true);
+    setEditingProduct(null);
+    setProductFormData({ productId: '', price: '' });
+    setProductFormErrors({});
+  };
+
+  const handleOpenEditProduct = (supplierProduct) => {
+    setEditingProduct(supplierProduct);
+    setProductFormData({
+      productId: supplierProduct.productId,
+      price: supplierProduct.price,
+    });
+    setProductFormErrors({});
+  };
+
+  const validateProductForm = () => {
+    const errors = {};
+    if (!productFormData.productId) errors.productId = 'المنتج مطلوب';
+    if (!productFormData.price || parseFloat(productFormData.price) <= 0) {
+      errors.price = 'السعر مطلوب ويجب أن يكون أكبر من صفر';
+    }
+    setProductFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const handleProductSubmit = async (e) => {
+    e.preventDefault();
+    if (!validateProductForm()) return;
+
+    try {
+      if (editingProduct) {
+        await updateProductMutation.mutateAsync({
+          id: editingProduct.id,
+          data: {
+            productId: productFormData.productId,
+            price: productFormData.price,
+          },
+        });
+        showToast('تم تحديث المنتج بنجاح');
+      } else {
+        await createProductMutation.mutateAsync({
+          supplierId: selectedSupplier.id,
+          productId: productFormData.productId,
+          price: productFormData.price,
+        });
+        showToast('تم إضافة المنتج بنجاح');
+      }
+      setEditingProduct(null);
+      setProductFormData({ productId: '', price: '' });
+      setProductFormErrors({});
+    } catch (error) {
+      showToast(error.message || 'حدث خطأ', 'error');
+    }
+  };
+
+  const handleDeleteProduct = (supplierProduct) => {
+    setProductToDelete(supplierProduct);
+    setIsDeleteProductModalOpen(true);
+  };
+
+  const confirmDeleteProduct = async () => {
+    if (productToDelete) {
+      try {
+        await deleteProductMutation.mutateAsync(productToDelete.id);
+        showToast('تم حذف المنتج بنجاح');
+        setProductToDelete(null);
+        setIsDeleteProductModalOpen(false);
       } catch (error) {
         showToast(error.message || 'حدث خطأ أثناء الحذف', 'error');
       }
@@ -255,12 +358,20 @@ export function Suppliers() {
                       <td className="px-4 py-3 text-sm text-gray-800 whitespace-nowrap">
                         <div className="flex gap-2 justify-start">
                           {permissions.edit && (
-                            <button
-                              onClick={() => handleOpenEdit(row)}
-                              className="px-3 py-1 bg-sky-600 text-white rounded-lg hover:bg-sky-700 text-sm"
-                            >
-                              تعديل
-                            </button>
+                            <>
+                              <button
+                                onClick={() => handleOpenEdit(row)}
+                                className="px-3 py-1 bg-sky-600 text-white rounded-lg hover:bg-sky-700 text-sm"
+                              >
+                                تعديل
+                              </button>
+                              <button
+                                onClick={() => handleOpenProducts(row)}
+                                className="px-3 py-1 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm"
+                              >
+                                منتجات
+                              </button>
+                            </>
                           )}
                           {permissions.delete && (
                             <button
@@ -442,6 +553,190 @@ export function Suppliers() {
         onConfirm={confirmDelete}
         title="تأكيد الحذف"
         message={`هل أنت متأكد من حذف المورد "${itemToDelete?.name}"؟`}
+        confirmText="حذف"
+        cancelText="إلغاء"
+        danger
+      />
+
+      {/* Products Management Modal */}
+      <Modal
+        isOpen={isProductsModalOpen}
+        onClose={() => {
+          setIsProductsModalOpen(false);
+          setSelectedSupplier(null);
+          setEditingProduct(null);
+          setProductFormData({ productId: '', price: '' });
+        }}
+        title={`إدارة منتجات المورد: ${selectedSupplier?.name}`}
+        size="lg"
+      >
+        <div className="space-y-6">
+          {/* Add/Edit Product Form */}
+          <form onSubmit={handleProductSubmit} className="bg-gray-50 p-4 rounded-lg space-y-4">
+            <h3 className="font-semibold text-gray-800 mb-3">
+              {editingProduct ? 'تعديل منتج' : 'إضافة منتج جديد'}
+            </h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  المنتج <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={productFormData.productId}
+                  onChange={(e) =>
+                    setProductFormData({ ...productFormData, productId: e.target.value })
+                  }
+                  disabled={!!editingProduct}
+                  className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-sky-500 ${
+                    productFormErrors.productId ? 'border-red-500' : 'border-gray-300'
+                  } ${editingProduct ? 'bg-gray-100' : ''}`}
+                >
+                  <option value="">اختر منتج</option>
+                  {productsData?.data
+                    ?.filter(
+                      (p) =>
+                        !editingProduct ||
+                        p.id === editingProduct.productId ||
+                        !supplierProductsData?.data?.some((sp) => sp.productId === p.id)
+                    )
+                    .map((product) => (
+                      <option key={product.id} value={product.id}>
+                        {product.name} - {product.category}
+                      </option>
+                    ))}
+                </select>
+                {productFormErrors.productId && (
+                  <p className="mt-1 text-sm text-red-600">{productFormErrors.productId}</p>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  السعر <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={productFormData.price}
+                  onChange={(e) =>
+                    setProductFormData({ ...productFormData, price: e.target.value })
+                  }
+                  className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-sky-500 ${
+                    productFormErrors.price ? 'border-red-500' : 'border-gray-300'
+                  }`}
+                />
+                {productFormErrors.price && (
+                  <p className="mt-1 text-sm text-red-600">{productFormErrors.price}</p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                type="submit"
+                disabled={createProductMutation.isPending || updateProductMutation.isPending}
+                className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 disabled:opacity-50"
+              >
+                {createProductMutation.isPending || updateProductMutation.isPending
+                  ? 'جاري الحفظ...'
+                  : editingProduct
+                  ? 'تحديث'
+                  : 'إضافة'}
+              </button>
+              {editingProduct && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingProduct(null);
+                    setProductFormData({ productId: '', price: '' });
+                    setProductFormErrors({});
+                  }}
+                  className="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400"
+                >
+                  إلغاء
+                </button>
+              )}
+            </div>
+          </form>
+
+          {/* Products List */}
+          <div>
+            <h3 className="font-semibold text-gray-800 mb-3">منتجات المورد</h3>
+            {loadingProducts ? (
+              <p className="text-center text-gray-500 py-4">جاري التحميل...</p>
+            ) : supplierProductsData?.data?.length === 0 ? (
+              <p className="text-center text-gray-500 py-4">لا توجد منتجات</p>
+            ) : (
+              <div className="border border-gray-200 rounded-lg overflow-hidden">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700">
+                        اسم المنتج
+                      </th>
+                      <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700">
+                        الفئة
+                      </th>
+                      <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700">
+                        السعر
+                      </th>
+                      {permissions.edit && (
+                        <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700">
+                          الإجراءات
+                        </th>
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-100">
+                    {supplierProductsData?.data?.map((sp) => {
+                      const product = productsData?.data?.find((p) => p.id === sp.productId);
+                      return (
+                        <tr key={sp.id} className="hover:bg-gray-50">
+                          <td className="px-4 py-3 text-sm text-gray-800">
+                            {product?.name || '-'}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-800">
+                            {product?.category || '-'}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-800 font-semibold">
+                            {parseFloat(sp.price || 0).toFixed(2)} ج.م
+                          </td>
+                          {permissions.edit && (
+                            <td className="px-4 py-3 text-sm text-gray-800">
+                              <div className="flex gap-2 justify-start">
+                                <button
+                                  onClick={() => handleOpenEditProduct(sp)}
+                                  className="px-3 py-1 bg-sky-600 text-white rounded-lg hover:bg-sky-700 text-xs"
+                                >
+                                  تعديل
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteProduct(sp)}
+                                  className="px-3 py-1 bg-rose-600 text-white rounded-lg hover:bg-rose-700 text-xs"
+                                >
+                                  حذف
+                                </button>
+                              </div>
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      </Modal>
+
+      {/* Delete Product Confirmation Modal */}
+      <ConfirmModal
+        isOpen={isDeleteProductModalOpen}
+        onClose={() => setIsDeleteProductModalOpen(false)}
+        onConfirm={confirmDeleteProduct}
+        title="تأكيد الحذف"
+        message={`هل أنت متأكد من حذف هذا المنتج من المورد؟`}
         confirmText="حذف"
         cancelText="إلغاء"
         danger

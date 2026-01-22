@@ -21,36 +21,20 @@ export function PurchasingDashboard() {
       path: '/purchasing/suppliers',
     },
     {
-      id: 'purchase-requests',
-      name: 'طلبات الشراء',
-      icon: '📋',
+      id: 'products',
+      name: 'المنتجات',
+      icon: '📦',
       color: 'bg-green-500',
       hoverColor: 'hover:bg-green-600',
-      path: '/purchasing/purchase-requests',
+      path: '/purchasing/products',
     },
     {
-      id: 'purchase-orders',
-      name: 'أوامر الشراء',
-      icon: '📝',
+      id: 'custodies',
+      name: 'صرف العهدة',
+      icon: '💵',
       color: 'bg-yellow-500',
       hoverColor: 'hover:bg-yellow-600',
-      path: '/purchasing/purchase-orders',
-    },
-    {
-      id: 'goods-receipt',
-      name: 'استلام البضائع',
-      icon: '📦',
-      color: 'bg-purple-500',
-      hoverColor: 'hover:bg-purple-600',
-      path: '/purchasing/goods-receipt',
-    },
-    {
-      id: 'invoices',
-      name: 'الفواتير',
-      icon: '🧾',
-      color: 'bg-red-500',
-      hoverColor: 'hover:bg-red-600',
-      path: '/purchasing/invoices',
+      path: '/purchasing/custodies',
     },
   ];
 
@@ -116,12 +100,55 @@ export function PurchasingDashboard() {
             <div className="text-4xl">🧾</div>
           </div>
         </div>
+
+        {/* New Statistics Cards - Show if available */}
+        {stats?.totalProducts !== undefined && (
+          <div className="bg-white rounded-lg shadow-lg p-6 border-l-4 border-emerald-500">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-gray-600 text-sm mb-1">المنتجات</p>
+                <p className="text-3xl font-bold text-gray-800">
+                  {isLoading ? '...' : stats?.totalProducts || 0}
+                </p>
+              </div>
+              <div className="text-4xl">📦</div>
+            </div>
+          </div>
+        )}
+
+        {stats?.openCustodies !== undefined && (
+          <div className="bg-white rounded-lg shadow-lg p-6 border-l-4 border-amber-500">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-gray-600 text-sm mb-1">العهد المفتوحة</p>
+                <p className="text-3xl font-bold text-gray-800">
+                  {isLoading ? '...' : stats?.openCustodies || 0}
+                </p>
+              </div>
+              <div className="text-4xl">💵</div>
+            </div>
+          </div>
+        )}
+
+        {stats?.priceVarianceAlerts !== undefined && (
+          <div className="bg-white rounded-lg shadow-lg p-6 border-l-4 border-pink-500">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-gray-600 text-sm mb-1">تنبيهات السعر</p>
+                <p className="text-3xl font-bold text-gray-800">
+                  {isLoading ? '...' : stats?.priceVarianceAlerts || 0}
+                </p>
+              </div>
+              <div className="text-4xl">⚠️</div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Quick Links */}
       <div className="bg-white rounded-lg shadow-lg p-6">
         <h2 className="text-2xl font-bold text-gray-800 mb-6">روابط سريعة</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {quickLinks.map((link) => (
             <button
               key={link.id}

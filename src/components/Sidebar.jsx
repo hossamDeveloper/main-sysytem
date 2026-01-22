@@ -35,7 +35,8 @@ export function Sidebar({ activeModule, onModuleChange }) {
   const purchasingSubModules = [
     { id: 'purchasing-dashboard', name: 'لوحة التحكم', icon: '📊', path: '/purchasing' },
     { id: 'suppliers', name: 'إدارة الموردين', icon: '🏢', path: '/purchasing/suppliers' },
-    { id: 'purchase-requests', name: 'طلبات الشراء', icon: '📋', path: '/purchasing/purchase-requests' },
+    { id: 'products', name: 'المنتجات', icon: '📦', path: '/purchasing/products' },
+    { id: 'custodies', name: 'صرف العهدة', icon: '💵', path: '/purchasing/custodies' },
     { id: 'purchase-orders', name: 'أوامر الشراء', icon: '📝', path: '/purchasing/purchase-orders' },
     { id: 'goods-receipt', name: 'استلام البضائع', icon: '📦', path: '/purchasing/goods-receipt' },
     { id: 'invoices', name: 'الفواتير', icon: '🧾', path: '/purchasing/invoices' },

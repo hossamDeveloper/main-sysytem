@@ -13,8 +13,10 @@ export function PurchasingLayout() {
       setActiveModule('purchasing-dashboard');
     } else if (path.includes('/suppliers')) {
       setActiveModule('suppliers');
-    } else if (path.includes('/purchase-requests')) {
-      setActiveModule('purchase-requests');
+    } else if (path.includes('/products')) {
+      setActiveModule('products');
+    } else if (path.includes('/custodies')) {
+      setActiveModule('custodies');
     } else if (path.includes('/purchase-orders')) {
       setActiveModule('purchase-orders');
     } else if (path.includes('/goods-receipt')) {

@@ -5,6 +5,7 @@ import { useCurrentUser } from '../services/userApi';
 import { useERPStorage } from '../hooks/useERPStorage';
 import { useModulePermissions } from '../hooks/usePermissions';
 import { useMemo } from 'react';
+import { useDashboardStats } from '../services/purchasingQueries';
 
 export function DashboardHome({ onNavigate }) {
   const navigate = useNavigate();
@@ -21,6 +22,8 @@ export function DashboardHome({ onNavigate }) {
   const attendancePermissions = useModulePermissions('attendance');
   const loansPermissions = useModulePermissions('loans');
   const payslipsPermissions = useModulePermissions('payslips');
+  const purchasingPermissions = useModulePermissions('purchasing');
+  const { data: purchasingStats } = useDashboardStats();
 
   const handleLogout = () => {
     dispatch(logout());
@@ -101,6 +104,66 @@ export function DashboardHome({ onNavigate }) {
       module: 'payslips',
       permission: payslipsPermissions.view,
     },
+    {
+      id: 'purchasing',
+      name: 'المشتريات',
+      icon: '🛒',
+      color: 'bg-sky-500',
+      hoverColor: 'hover:bg-sky-600',
+      path: '/purchasing',
+      module: null,
+      permission: purchasingPermissions.view,
+    },
+    {
+      id: 'suppliers',
+      name: 'إدارة الموردين',
+      icon: '🏢',
+      color: 'bg-indigo-500',
+      hoverColor: 'hover:bg-indigo-600',
+      path: '/purchasing/suppliers',
+      module: null,
+      permission: purchasingPermissions.view,
+    },
+    {
+      id: 'purchase-requests',
+      name: 'طلبات الشراء',
+      icon: '📋',
+      color: 'bg-teal-500',
+      hoverColor: 'hover:bg-teal-600',
+      path: '/purchasing/purchase-requests',
+      module: null,
+      permission: purchasingPermissions.view,
+    },
+    {
+      id: 'purchase-orders',
+      name: 'أوامر الشراء',
+      icon: '📝',
+      color: 'bg-orange-500',
+      hoverColor: 'hover:bg-orange-600',
+      path: '/purchasing/purchase-orders',
+      module: null,
+      permission: purchasingPermissions.view,
+    },
+    {
+      id: 'goods-receipt',
+      name: 'استلام البضائع',
+      icon: '📦',
+      color: 'bg-pink-500',
+      hoverColor: 'hover:bg-pink-600',
+      path: '/purchasing/goods-receipt',
+      module: null,
+      permission: purchasingPermissions.view,
+    },
+    {
+      id: 'invoices',
+      name: 'الفواتير',
+      icon: '🧾',
+      color: 'bg-red-500',
+      hoverColor: 'hover:bg-red-600',
+      path: '/purchasing/invoices',
+      module: null,
+      permission: purchasingPermissions.view,
+    },
   ].filter((link) => link.permission); // إظهار فقط الروابط التي لديه صلاحية عليها
 
   const handleQuickLink = (module) => {
@@ -179,6 +242,59 @@ export function DashboardHome({ onNavigate }) {
             <div className="text-4xl">📄</div>
           </div>
         </div>
+
+        {/* Purchasing Statistics - Show only if user has permissions */}
+        {purchasingPermissions.view && purchasingStats && (
+          <>
+            <div className="bg-white rounded-lg shadow-lg p-6 border-l-4 border-sky-500">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-gray-600 text-sm mb-1">إجمالي الموردين</p>
+                  <p className="text-3xl font-bold text-gray-800">
+                    {purchasingStats.totalSuppliers || 0}
+                  </p>
+                </div>
+                <div className="text-4xl">🏢</div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-lg shadow-lg p-6 border-l-4 border-teal-500">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-gray-600 text-sm mb-1">طلبات الشراء المفتوحة</p>
+                  <p className="text-3xl font-bold text-gray-800">
+                    {purchasingStats.openPRs || 0}
+                  </p>
+                </div>
+                <div className="text-4xl">📋</div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-lg shadow-lg p-6 border-l-4 border-orange-500">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-gray-600 text-sm mb-1">أوامر الشراء المفتوحة</p>
+                  <p className="text-3xl font-bold text-gray-800">
+                    {purchasingStats.openPOs || 0}
+                  </p>
+                </div>
+                <div className="text-4xl">📝</div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-lg shadow-lg p-6 border-l-4 border-red-500">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-gray-600 text-sm mb-1">الفواتير المعلقة</p>
+                  <p className="text-3xl font-bold text-gray-800">
+                    {purchasingStats.pendingInvoices || 0}
+                  </p>
+                </div>
+                <div className="text-4xl">🧾</div>
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Quick Links */}
@@ -188,7 +304,7 @@ export function DashboardHome({ onNavigate }) {
           {quickLinks.map((link) => (
             <button
               key={link.id}
-              onClick={() => handleQuickLink(link.module)}
+              onClick={() => handleQuickLink(link)}
               className={`${link.color} ${link.hoverColor} text-white p-6 rounded-lg transition-all transform hover:scale-105 shadow-md`}
             >
               <div className="text-4xl mb-3">{link.icon}</div>

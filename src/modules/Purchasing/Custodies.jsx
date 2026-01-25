@@ -181,11 +181,50 @@ export function Custodies() {
   const columns = [
     { key: 'custodyNumber', label: 'رقم العهدة' },
     { key: 'title', label: 'العنوان' },
-    { key: 'employeeName', label: 'الموظف' },
+    {
+      key: 'employeeName',
+      label: 'الموظف',
+      render: (value, row) => {
+        // Try to get employee name from stored data first
+        if (value) return value;
+        // If not found, search in employees list
+        if (row.employeeId && employees) {
+          const employee = employees.find((e) => e.id === row.employeeId);
+          return employee?.name || row.employeeId || '-';
+        }
+        return row.employeeId || '-';
+      },
+    },
     {
       key: 'amount',
-      label: 'المبلغ',
+      label: 'إجمالي المبلغ',
       render: (value) => `${parseFloat(value || 0).toFixed(2)} ج.م`,
+    },
+    {
+      key: 'spentAmount',
+      label: 'المصروف',
+      render: (value, row) => {
+        const spent = parseFloat(value) || 0;
+        return (
+          <span className={spent > 0 ? 'text-red-600 font-medium' : 'text-gray-500'}>
+            {spent.toFixed(2)} ج.م
+          </span>
+        );
+      },
+    },
+    {
+      key: 'remainingAmount',
+      label: 'المتبقي',
+      render: (value, row) => {
+        const amount = parseFloat(row.amount) || 0;
+        const spent = parseFloat(row.spentAmount) || 0;
+        const remaining = value !== undefined ? parseFloat(value) : amount - spent;
+        return (
+          <span className={remaining > 0 ? 'text-green-600 font-medium' : 'text-gray-500'}>
+            {remaining.toFixed(2)} ج.م
+          </span>
+        );
+      },
     },
     { key: 'issueDate', label: 'تاريخ الصرف' },
     {

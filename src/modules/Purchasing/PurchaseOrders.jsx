@@ -3,6 +3,8 @@ import {
   usePurchaseOrders,
   useSuppliers,
   useCustodies,
+  useProducts,
+  useSupplierProducts,
   useCreatePurchaseOrder,
   useUpdatePurchaseOrder,
   useDeletePurchaseOrder,
@@ -27,27 +29,36 @@ export function PurchaseOrders() {
   const [itemToDelete, setItemToDelete] = useState(null);
   const [toast, setToast] = useState(null);
 
-  const { data, isLoading } = usePurchaseOrders({ page, limit: 10, search, status: statusFilter });
-  const { data: suppliersData } = useSuppliers({ limit: 1000 });
-  const { data: openCustodiesData } = useCustodies({ limit: 1000, status: 'Issued' });
-  const createMutation = useCreatePurchaseOrder();
-  const updateMutation = useUpdatePurchaseOrder();
-  const deleteMutation = useDeletePurchaseOrder();
-
   const [formData, setFormData] = useState({
     supplierId: '',
     supplierName: '',
+    custodyId: '',
+    custodyNumber: '',
     responsibleEmployeeId: '',
     responsibleEmployeeName: '',
+    custodyAmount: 0,
+    custodyRemainingAmount: 0,
     deliveryDate: '',
     paymentTerms: '',
     status: 'Open',
     items: [],
     notes: '',
   });
-
   const [formErrors, setFormErrors] = useState({});
   const [newItem, setNewItem] = useState({ itemName: '', quantity: '', price: '' });
+  const [itemInputMode, setItemInputMode] = useState('manual'); // 'manual' or 'product'
+  const [selectedProductId, setSelectedProductId] = useState('');
+
+  const { data, isLoading } = usePurchaseOrders({ page, limit: 10, search, status: statusFilter });
+  const { data: suppliersData } = useSuppliers({ limit: 1000 });
+  const { data: openCustodiesData } = useCustodies({ limit: 1000, status: 'Issued' });
+  const { data: productsData } = useProducts({ limit: 1000 });
+  const { data: supplierProductsData } = useSupplierProducts(formData.supplierId || null, {
+    limit: 1000,
+  });
+  const createMutation = useCreatePurchaseOrder();
+  const updateMutation = useUpdatePurchaseOrder();
+  const deleteMutation = useDeletePurchaseOrder();
 
   const showToast = (message, type = 'success') => {
     setToast({ message, type });
@@ -57,10 +68,20 @@ export function PurchaseOrders() {
   const validateForm = () => {
     const errors = {};
     if (!formData.supplierId) errors.supplierId = 'المورد مطلوب';
-    if (!formData.responsibleEmployeeId) errors.responsibleEmployeeId = 'الموظف المسؤول مطلوب';
+    if (!formData.custodyId) errors.custodyId = 'العهدة مطلوبة';
     if (!formData.deliveryDate) errors.deliveryDate = 'تاريخ التسليم مطلوب';
     if (!formData.paymentTerms) errors.paymentTerms = 'شروط الدفع مطلوبة';
     if (formData.items.length === 0) errors.items = 'يجب إضافة عنصر واحد على الأقل';
+    
+    // Check if total amount exceeds custody remaining amount
+    const orderTotal = formData.items.reduce(
+      (sum, item) => sum + (item.price || 0) * (item.quantity || 0),
+      0
+    );
+    if (formData.custodyRemainingAmount > 0 && orderTotal > formData.custodyRemainingAmount) {
+      errors.items = `إجمالي الطلب (${orderTotal.toFixed(2)}) يتجاوز المتبقي في العهدة (${formData.custodyRemainingAmount.toFixed(2)})`;
+    }
+    
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -69,8 +90,12 @@ export function PurchaseOrders() {
     setFormData({
       supplierId: '',
       supplierName: '',
+      custodyId: '',
+      custodyNumber: '',
       responsibleEmployeeId: '',
       responsibleEmployeeName: '',
+      custodyAmount: 0,
+      custodyRemainingAmount: 0,
       deliveryDate: '',
       paymentTerms: '',
       status: 'Open',
@@ -78,6 +103,8 @@ export function PurchaseOrders() {
       notes: '',
     });
     setNewItem({ itemName: '', quantity: '', price: '' });
+    setItemInputMode('manual');
+    setSelectedProductId('');
     setFormErrors({});
     setEditingPO(null);
   };
@@ -89,55 +116,126 @@ export function PurchaseOrders() {
       supplierId,
       supplierName: supplier?.name || '',
     });
+    // Reset product selection when supplier changes
+    if (itemInputMode === 'product') {
+      setSelectedProductId('');
+      setNewItem({ itemName: '', quantity: '', price: '' });
+    }
   };
 
-  const responsibleEmployees = useMemo(() => {
+  // Get open custodies with remaining amount calculated
+  const openCustodiesWithBalance = useMemo(() => {
     const openCustodies = openCustodiesData?.data || [];
-    const byEmployeeId = new Map();
-    for (const c of openCustodies) {
-      if (!c?.employeeId) continue;
-      const prev = byEmployeeId.get(c.employeeId) || {
-        employeeId: c.employeeId,
-        employeeName: c.employeeName || c.employeeId,
-        openCustodiesCount: 0,
-        openCustodiesAmount: 0,
+    return openCustodies.map((c) => {
+      const amount = parseFloat(c.amount) || 0;
+      const spentAmount = parseFloat(c.spentAmount) || 0;
+      const remainingAmount = c.remainingAmount !== undefined 
+        ? parseFloat(c.remainingAmount) 
+        : amount - spentAmount;
+      return {
+        ...c,
+        remainingAmount,
       };
-      prev.openCustodiesCount += 1;
-      prev.openCustodiesAmount += parseFloat(c.amount) || 0;
-      byEmployeeId.set(c.employeeId, prev);
-    }
-    return Array.from(byEmployeeId.values()).sort((a, b) =>
-      String(a.employeeName || '').localeCompare(String(b.employeeName || ''))
-    );
+    }).filter((c) => c.remainingAmount > 0); // Only show custodies with remaining balance
   }, [openCustodiesData?.data]);
 
-  const handleResponsibleEmployeeChange = (employeeId) => {
-    const emp = responsibleEmployees.find((e) => e.employeeId === employeeId);
-    setFormData({
-      ...formData,
-      responsibleEmployeeId: employeeId,
-      responsibleEmployeeName: emp?.employeeName || '',
+  const handleCustodyChange = (custodyId) => {
+    const custody = openCustodiesWithBalance.find((c) => c.id === custodyId);
+    if (custody) {
+      setFormData({
+        ...formData,
+        custodyId,
+        custodyNumber: custody.custodyNumber || '',
+        responsibleEmployeeId: custody.employeeId || '',
+        responsibleEmployeeName: custody.employeeName || '',
+        custodyAmount: parseFloat(custody.amount) || 0,
+        custodyRemainingAmount: custody.remainingAmount || 0,
+      });
+    } else {
+      setFormData({
+        ...formData,
+        custodyId: '',
+        custodyNumber: '',
+        responsibleEmployeeId: '',
+        responsibleEmployeeName: '',
+        custodyAmount: 0,
+        custodyRemainingAmount: 0,
+      });
+    }
+  };
+
+  const handleProductSelect = (productId) => {
+    if (!productId) {
+      setSelectedProductId('');
+      setNewItem({ itemName: '', quantity: '', price: '' });
+      return;
+    }
+    
+    const product = productsData?.data?.find((p) => p.id === productId);
+    if (!product) return;
+    
+    // Find supplier product price if supplier is selected
+    let productPrice = '';
+    if (formData.supplierId && supplierProductsData?.data) {
+      const supplierProduct = supplierProductsData.data.find(
+        (sp) => sp.productId === productId
+      );
+      if (supplierProduct) {
+        productPrice = supplierProduct.price || '';
+      }
+    }
+    
+    setSelectedProductId(productId);
+    setNewItem({
+      itemName: product.name || '',
+      quantity: '',
+      price: productPrice,
     });
   };
 
   const handleAddItem = () => {
-    if (!newItem.itemName || !newItem.quantity || !newItem.price) {
-      showToast('يرجى ملء جميع حقول العنصر', 'error');
-      return;
+    if (itemInputMode === 'product') {
+      // Add from product
+      if (!selectedProductId || !newItem.quantity || !newItem.price) {
+        showToast('يرجى ملء جميع حقول العنصر', 'error');
+        return;
+      }
+      const product = productsData?.data?.find((p) => p.id === selectedProductId);
+      setFormData({
+        ...formData,
+        items: [
+          ...formData.items,
+          {
+            id: Date.now(),
+            productId: selectedProductId,
+            itemName: product?.name || newItem.itemName,
+            quantity: parseInt(newItem.quantity),
+            price: parseFloat(newItem.price),
+          },
+        ],
+      });
+      setSelectedProductId('');
+      setNewItem({ itemName: '', quantity: '', price: '' });
+    } else {
+      // Manual input
+      if (!newItem.itemName || !newItem.quantity || !newItem.price) {
+        showToast('يرجى ملء جميع حقول العنصر', 'error');
+        return;
+      }
+      setFormData({
+        ...formData,
+        items: [
+          ...formData.items,
+          {
+            id: Date.now(),
+            itemName: newItem.itemName,
+            quantity: parseInt(newItem.quantity),
+            price: parseFloat(newItem.price),
+          },
+        ],
+      });
+      setNewItem({ itemName: '', quantity: '', price: '' });
     }
-    setFormData({
-      ...formData,
-      items: [
-        ...formData.items,
-        {
-          id: Date.now(),
-          itemName: newItem.itemName,
-          quantity: parseInt(newItem.quantity),
-          price: parseFloat(newItem.price),
-        },
-      ],
-    });
-    setNewItem({ itemName: '', quantity: '', price: '' });
   };
 
   const handleRemoveItem = (itemId) => {
@@ -154,11 +252,20 @@ export function PurchaseOrders() {
 
   const handleOpenEdit = (po) => {
     setEditingPO(po);
+    setItemInputMode('manual');
+    setSelectedProductId('');
+    setNewItem({ itemName: '', quantity: '', price: '' });
+    // Find custody to get current remaining amount
+    const custody = openCustodiesWithBalance.find((c) => c.id === po.custodyId);
     setFormData({
       supplierId: po.supplierId || '',
       supplierName: po.supplierName || '',
+      custodyId: po.custodyId || '',
+      custodyNumber: po.custodyNumber || '',
       responsibleEmployeeId: po.responsibleEmployeeId || '',
       responsibleEmployeeName: po.responsibleEmployeeName || '',
+      custodyAmount: parseFloat(po.custodyAmount) || custody?.amount || 0,
+      custodyRemainingAmount: custody?.remainingAmount ?? parseFloat(po.custodyRemainingAmount) ?? 0,
       deliveryDate: po.deliveryDate || '',
       paymentTerms: po.paymentTerms || '',
       status: po.status || 'Open',
@@ -445,8 +552,8 @@ export function PurchaseOrders() {
                 }`}
               >
                 <option value="">اختر مورد</option>
-                {suppliersData?.data
-                  ?.filter((s) => s.status === 'Active')
+                {(suppliersData?.data || [])
+                  .filter((s) => s.status === 'Active')
                   .map((supplier) => (
                     <option key={supplier.id} value={supplier.id}>
                       {supplier.name}
@@ -460,25 +567,40 @@ export function PurchaseOrders() {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                الموظف المسؤول (لديه عهد مفتوحة) <span className="text-red-500">*</span>
+                العهدة <span className="text-red-500">*</span>
               </label>
               <select
-                value={formData.responsibleEmployeeId}
-                onChange={(e) => handleResponsibleEmployeeChange(e.target.value)}
+                value={formData.custodyId}
+                onChange={(e) => handleCustodyChange(e.target.value)}
                 className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-sky-500 ${
-                  formErrors.responsibleEmployeeId ? 'border-red-500' : 'border-gray-300'
+                  formErrors.custodyId ? 'border-red-500' : 'border-gray-300'
                 }`}
               >
-                <option value="">اختر موظف</option>
-                {responsibleEmployees.map((emp) => (
-                  <option key={emp.employeeId} value={emp.employeeId}>
-                    {emp.employeeName} — عهد مفتوحة: {emp.openCustodiesCount} — إجمالي:{' '}
-                    {emp.openCustodiesAmount.toFixed(2)}
+                <option value="">اختر عهدة</option>
+                {openCustodiesWithBalance.map((custody) => (
+                  <option key={custody.id} value={custody.id}>
+                    {custody.custodyNumber} — {custody.employeeName} — المتبقي:{' '}
+                    {custody.remainingAmount.toFixed(2)} ج.م
                   </option>
                 ))}
               </select>
-              {formErrors.responsibleEmployeeId && (
-                <p className="mt-1 text-sm text-red-600">{formErrors.responsibleEmployeeId}</p>
+              {formErrors.custodyId && (
+                <p className="mt-1 text-sm text-red-600">{formErrors.custodyId}</p>
+              )}
+              {formData.custodyId && (
+                <div className="mt-2 p-3 bg-blue-50 rounded-lg text-sm">
+                  <p className="text-gray-700">
+                    <span className="font-medium">الموظف:</span> {formData.responsibleEmployeeName}
+                  </p>
+                  <p className="text-gray-700">
+                    <span className="font-medium">إجمالي العهدة:</span>{' '}
+                    {formData.custodyAmount.toFixed(2)} ج.م
+                  </p>
+                  <p className="text-green-700 font-medium">
+                    <span className="font-medium">المتبقي:</span>{' '}
+                    {formData.custodyRemainingAmount.toFixed(2)} ج.م
+                  </p>
+                </div>
               )}
             </div>
 
@@ -534,45 +656,135 @@ export function PurchaseOrders() {
 
           {/* Items Section */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              العناصر <span className="text-red-500">*</span>
-            </label>
+            <div className="flex justify-between items-center mb-2">
+              <label className="block text-sm font-medium text-gray-700">
+                العناصر <span className="text-red-500">*</span>
+              </label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setItemInputMode('manual');
+                    setSelectedProductId('');
+                    setNewItem({ itemName: '', quantity: '', price: '' });
+                  }}
+                  className={`px-3 py-1 text-sm rounded-lg ${
+                    itemInputMode === 'manual'
+                      ? 'bg-sky-600 text-white'
+                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                  }`}
+                >
+                  إدخال يدوي
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setItemInputMode('product');
+                    setSelectedProductId('');
+                    setNewItem({ itemName: '', quantity: '', price: '' });
+                  }}
+                  className={`px-3 py-1 text-sm rounded-lg ${
+                    itemInputMode === 'product'
+                      ? 'bg-sky-600 text-white'
+                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                  }`}
+                >
+                  من المنتجات
+                </button>
+              </div>
+            </div>
             {formErrors.items && (
               <p className="mb-2 text-sm text-red-600">{formErrors.items}</p>
             )}
 
             {/* Add New Item */}
-            <div className="grid grid-cols-4 gap-2 mb-3">
-              <input
-                type="text"
-                placeholder="اسم العنصر"
-                value={newItem.itemName}
-                onChange={(e) => setNewItem({ ...newItem, itemName: e.target.value })}
-                className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-sky-500"
-              />
-              <input
-                type="number"
-                placeholder="الكمية"
-                value={newItem.quantity}
-                onChange={(e) => setNewItem({ ...newItem, quantity: e.target.value })}
-                className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-sky-500"
-              />
-              <input
-                type="number"
-                step="0.01"
-                placeholder="السعر"
-                value={newItem.price}
-                onChange={(e) => setNewItem({ ...newItem, price: e.target.value })}
-                className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-sky-500"
-              />
-              <button
-                type="button"
-                onClick={handleAddItem}
-                className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600"
-              >
-                إضافة
-              </button>
-            </div>
+            {itemInputMode === 'product' ? (
+              <div className="space-y-2 mb-3">
+                <select
+                  value={selectedProductId}
+                  onChange={(e) => handleProductSelect(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-sky-500"
+                  disabled={!formData.supplierId}
+                >
+                  <option value="">اختر منتج</option>
+                  {(productsData?.data || []).map((product) => (
+                    <option key={product.id} value={product.id}>
+                      {product.name} {product.category ? `(${product.category})` : ''}
+                    </option>
+                  ))}
+                </select>
+                {!formData.supplierId && (
+                  <div className="text-sm text-yellow-600 bg-yellow-50 p-2 rounded">
+                    يرجى اختيار مورد أولاً لعرض أسعار المنتجات
+                  </div>
+                )}
+                {formData.supplierId && selectedProductId && (
+                  <div className="grid grid-cols-4 gap-2">
+                    <input
+                      type="text"
+                      placeholder="اسم المنتج"
+                      value={newItem.itemName}
+                      disabled
+                      className="px-3 py-2 border border-gray-300 rounded-lg bg-gray-100"
+                    />
+                    <input
+                      type="number"
+                      placeholder="الكمية"
+                      value={newItem.quantity}
+                      onChange={(e) => setNewItem({ ...newItem, quantity: e.target.value })}
+                      className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-sky-500"
+                    />
+                    <input
+                      type="number"
+                      step="0.01"
+                      placeholder="السعر"
+                      value={newItem.price}
+                      onChange={(e) => setNewItem({ ...newItem, price: e.target.value })}
+                      className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-sky-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddItem}
+                      className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600"
+                    >
+                      إضافة
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="grid grid-cols-4 gap-2 mb-3">
+                <input
+                  type="text"
+                  placeholder="اسم العنصر"
+                  value={newItem.itemName}
+                  onChange={(e) => setNewItem({ ...newItem, itemName: e.target.value })}
+                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-sky-500"
+                />
+                <input
+                  type="number"
+                  placeholder="الكمية"
+                  value={newItem.quantity}
+                  onChange={(e) => setNewItem({ ...newItem, quantity: e.target.value })}
+                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-sky-500"
+                />
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="السعر"
+                  value={newItem.price}
+                  onChange={(e) => setNewItem({ ...newItem, price: e.target.value })}
+                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-sky-500"
+                />
+                <button
+                  type="button"
+                  onClick={handleAddItem}
+                  className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600"
+                >
+                  إضافة
+                </button>
+              </div>
+            )}
 
             {/* Items List */}
             <div className="border border-gray-200 rounded-lg p-4 max-h-60 overflow-y-auto">
@@ -596,7 +808,7 @@ export function PurchaseOrders() {
                         <td className="py-2">{item.quantity}</td>
                         <td className="py-2">{item.price} ج.م</td>
                         <td className="py-2">
-                          {(item.price * item.quantity).toFixed(2)} ج.م
+                          {((item.price || 0) * (item.quantity || 0)).toFixed(2)} ج.م
                         </td>
                         <td className="py-2">
                           <button
@@ -668,9 +880,15 @@ export function PurchaseOrders() {
                 <p className="text-gray-800">{viewingPO.supplierName}</p>
               </div>
               <div>
+                <label className="text-sm font-medium text-gray-600">العهدة</label>
+                <p className="text-gray-800">
+                  {viewingPO.custodyNumber || '-'}
+                </p>
+              </div>
+              <div>
                 <label className="text-sm font-medium text-gray-600">الموظف المسؤول</label>
                 <p className="text-gray-800">
-                  {viewingPO.responsibleEmployeeName || viewingPO.responsibleEmployeeId || '-'}
+                  {viewingPO.responsibleEmployeeName || '-'}
                 </p>
               </div>
               <div>
@@ -700,12 +918,12 @@ export function PurchaseOrders() {
                 </thead>
                 <tbody>
                   {viewingPO.items?.map((item, idx) => (
-                    <tr key={idx} className="border-t">
+                    <tr key={item.id || idx} className="border-t">
                       <td className="px-3 py-2">{item.itemName}</td>
                       <td className="px-3 py-2">{item.quantity}</td>
                       <td className="px-3 py-2">{item.price} ج.م</td>
                       <td className="px-3 py-2">
-                        {(item.price * item.quantity).toFixed(2)} ج.م
+                        {((item.price || 0) * (item.quantity || 0)).toFixed(2)} ج.م
                       </td>
                     </tr>
                   ))}

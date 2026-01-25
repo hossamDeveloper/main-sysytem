@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   useGoodsReceipts,
   usePurchaseOrders,
+  useCustodies,
   useCreateGoodsReceipt,
 } from '../../services/purchasingQueries';
 import { Modal } from '../../components/Modal';
@@ -19,7 +20,8 @@ export function GoodsReceipt() {
   const [toast, setToast] = useState(null);
 
   const { data, isLoading } = useGoodsReceipts({ page, limit: 10, search });
-  const { data: posData } = usePurchaseOrders({ limit: 1000, status: 'Open' });
+  const { data: posData } = usePurchaseOrders({ limit: 1000 });
+  const { data: custodiesData } = useCustodies({ limit: 1000 });
   const createMutation = useCreateGoodsReceipt();
 
   const [formData, setFormData] = useState({
@@ -28,6 +30,31 @@ export function GoodsReceipt() {
     items: [],
     notes: '',
   });
+
+  // Get custody info for selected PO
+  const selectedCustody = useMemo(() => {
+    if (!selectedPO?.custodyId || !custodiesData?.data) return null;
+    return custodiesData.data.find((c) => c.id === selectedPO.custodyId);
+  }, [selectedPO?.custodyId, custodiesData?.data]);
+
+  // Calculate total amount for received items
+  const totalReceivedAmount = useMemo(() => {
+    if (!formData.items.length || !selectedPO?.items) return 0;
+    return formData.items.reduce((sum, item) => {
+      const poItem = selectedPO.items.find((pi) => pi.id === item.itemId);
+      return sum + (item.receivedQuantity || 0) * (poItem?.price || 0);
+    }, 0);
+  }, [formData.items, selectedPO?.items]);
+
+  // Get custody remaining amount
+  const custodyRemainingAmount = useMemo(() => {
+    if (!selectedCustody) return 0;
+    const spent = parseFloat(selectedCustody.spentAmount) || 0;
+    if (selectedCustody.remainingAmount !== undefined) {
+      return parseFloat(selectedCustody.remainingAmount);
+    }
+    return (parseFloat(selectedCustody.amount) || 0) - spent;
+  }, [selectedCustody]);
 
   const [formErrors, setFormErrors] = useState({});
 
@@ -41,6 +68,18 @@ export function GoodsReceipt() {
     if (!formData.poId) errors.poId = 'أمر الشراء مطلوب';
     if (!formData.receivingDate) errors.receivingDate = 'تاريخ الاستلام مطلوب';
     if (formData.items.length === 0) errors.items = 'يجب إضافة عنصر واحد على الأقل';
+    
+    // Check if any items have received quantity
+    const hasReceivedItems = formData.items.some((item) => (item.receivedQuantity || 0) > 0);
+    if (!hasReceivedItems) {
+      errors.items = 'يجب إدخال كمية مستلمة لعنصر واحد على الأقل';
+    }
+    
+    // Check custody balance if PO has custody linked
+    if (selectedCustody && totalReceivedAmount > custodyRemainingAmount) {
+      errors.custody = `مبلغ الاستلام (${totalReceivedAmount.toFixed(2)} ج.م) يتجاوز المتبقي في العهدة (${custodyRemainingAmount.toFixed(2)} ج.م)`;
+    }
+    
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -63,14 +102,19 @@ export function GoodsReceipt() {
       setFormData({
         ...formData,
         poId,
-        items: po.items.map((item, idx) => ({
-          id: item.id || Date.now() + idx,
-          itemId: item.id || Date.now() + idx,
-          itemName: item.itemName,
-          orderedQuantity: item.quantity,
-          receivedQuantity: 0,
-          remainingQuantity: item.quantity - (item.receivedQuantity || 0),
-        })),
+        items: po.items.map((item, idx) => {
+          const orderedQty = item.quantity || 0;
+          const alreadyReceived = item.receivedQuantity || 0;
+          const remaining = orderedQty - alreadyReceived;
+          return {
+            id: item.id || Date.now() + idx,
+            itemId: item.id || Date.now() + idx,
+            itemName: item.itemName,
+            orderedQuantity: orderedQty,
+            receivedQuantity: 0,
+            remainingQuantity: Math.max(0, remaining),
+          };
+        }),
       });
     }
   };
@@ -78,13 +122,30 @@ export function GoodsReceipt() {
   const handleQuantityChange = (itemId, quantity) => {
     const item = formData.items.find((i) => i.id === itemId);
     if (item) {
-      const receivedQty = parseInt(quantity) || 0;
-      const remaining = item.orderedQuantity - receivedQty;
+      // Parse the input value
+      let receivedQty = 0;
+      if (quantity !== '' && quantity !== null && quantity !== undefined) {
+        const parsed = parseInt(String(quantity).trim(), 10);
+        receivedQty = isNaN(parsed) ? 0 : Math.max(0, parsed);
+      }
+      
+      // Ensure received quantity doesn't exceed remaining quantity
+      const maxAllowed = item.remainingQuantity || item.orderedQuantity || 0;
+      if (receivedQty > maxAllowed) {
+        receivedQty = maxAllowed;
+      }
+      
+      // Calculate new remaining: original remaining minus the newly entered quantity
+      const newRemaining = maxAllowed - receivedQty;
       setFormData({
         ...formData,
         items: formData.items.map((i) =>
           i.id === itemId
-            ? { ...i, receivedQuantity: receivedQty, remainingQuantity: Math.max(0, remaining) }
+            ? { 
+                ...i, 
+                receivedQuantity: receivedQty, 
+                remainingQuantity: Math.max(0, newRemaining) 
+              }
             : i
         ),
       });
@@ -123,10 +184,28 @@ export function GoodsReceipt() {
     );
   }
 
+  // Filter POs that can receive goods
+  const availablePOs = useMemo(() => {
+    if (!posData?.data) return [];
+    return posData.data.filter((po) => 
+      ['Open', 'Partially Received'].includes(po.status)
+    );
+  }, [posData?.data]);
+
   const columns = [
     { key: 'grnNumber', label: 'رقم الاستلام' },
     { key: 'poNumber', label: 'رقم أمر الشراء' },
     { key: 'receivingDate', label: 'تاريخ الاستلام' },
+    {
+      key: 'totalReceivedAmount',
+      label: 'إجمالي المبلغ',
+      render: (value) => value ? `${parseFloat(value).toFixed(2)} ج.م` : '-',
+    },
+    {
+      key: 'custodyDeduction',
+      label: 'خصم من العهدة',
+      render: (value) => value ? `${value.amountDeducted.toFixed(2)} ج.م` : '-',
+    },
     {
       key: 'items',
       label: 'عدد العناصر',
@@ -287,13 +366,11 @@ export function GoodsReceipt() {
                 }`}
               >
                 <option value="">اختر أمر شراء</option>
-                {posData?.data
-                  ?.filter((po) => ['Open', 'Partially Received'].includes(po.status))
-                  .map((po) => (
-                    <option key={po.id} value={po.id}>
-                      {po.poNumber} - {po.supplierName}
-                    </option>
-                  ))}
+                {availablePOs.map((po) => (
+                  <option key={po.id} value={po.id}>
+                    {po.poNumber} - {po.supplierName} ({po.status === 'Open' ? 'مفتوح' : 'مستلم جزئياً'})
+                  </option>
+                ))}
               </select>
               {formErrors.poId && (
                 <p className="mt-1 text-sm text-red-600">{formErrors.poId}</p>
@@ -318,6 +395,44 @@ export function GoodsReceipt() {
             </div>
           </div>
 
+          {/* Custody Info */}
+          {selectedPO && selectedCustody && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <h4 className="font-medium text-blue-800 mb-2">معلومات العهدة المرتبطة</h4>
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <span className="text-gray-600">رقم العهدة:</span>{' '}
+                  <span className="font-medium">{selectedCustody.custodyNumber}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">الموظف:</span>{' '}
+                  <span className="font-medium">{selectedCustody.employeeName}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">إجمالي العهدة:</span>{' '}
+                  <span className="font-medium">{parseFloat(selectedCustody.amount).toFixed(2)} ج.م</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">المتبقي في العهدة:</span>{' '}
+                  <span className={`font-medium ${custodyRemainingAmount < totalReceivedAmount ? 'text-red-600' : 'text-green-600'}`}>
+                    {custodyRemainingAmount.toFixed(2)} ج.م
+                  </span>
+                </div>
+              </div>
+              {formErrors.custody && (
+                <p className="mt-2 text-sm text-red-600 font-medium">{formErrors.custody}</p>
+              )}
+            </div>
+          )}
+
+          {selectedPO && !selectedCustody && selectedPO.custodyId && (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+              <p className="text-yellow-800 text-sm">
+                ⚠️ لم يتم العثور على العهدة المرتبطة بأمر الشراء
+              </p>
+            </div>
+          )}
+
           {/* Items Section */}
           {selectedPO && (
             <div>
@@ -337,30 +452,55 @@ export function GoodsReceipt() {
                       <tr className="border-b">
                         <th className="text-right py-2">اسم العنصر</th>
                         <th className="text-right py-2">المطلوب</th>
+                        <th className="text-right py-2">السعر</th>
                         <th className="text-right py-2">المستلم</th>
-                        <th className="text-right py-2">المتبقي</th>
+                        <th className="text-right py-2">الإجمالي</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {formData.items.map((item) => (
-                        <tr key={item.id} className="border-b">
-                          <td className="py-2">{item.itemName}</td>
-                          <td className="py-2">{item.orderedQuantity}</td>
-                          <td className="py-2">
-                            <input
-                              type="number"
-                              min="0"
-                              max={item.orderedQuantity}
-                              value={item.receivedQuantity}
-                              onChange={(e) => handleQuantityChange(item.id, e.target.value)}
-                              className="w-20 px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-sky-500"
-                            />
-                          </td>
-                          <td className="py-2">{item.remainingQuantity}</td>
-                        </tr>
-                      ))}
+                      {formData.items.map((item) => {
+                        const poItem = selectedPO.items.find((pi) => pi.id === item.itemId);
+                        const itemTotal = (item.receivedQuantity || 0) * (poItem?.price || 0);
+                        return (
+                          <tr key={item.id} className="border-b">
+                            <td className="py-2">{item.itemName}</td>
+                            <td className="py-2">{item.orderedQuantity}</td>
+                            <td className="py-2">{poItem?.price?.toFixed(2) || 0} ج.م</td>
+                            <td className="py-2">
+                              <input
+                                type="number"
+                                min="0"
+                                max={item.remainingQuantity || item.orderedQuantity || 0}
+                                step="1"
+                                value={item.receivedQuantity || 0}
+                                onChange={(e) => {
+                                  handleQuantityChange(item.id, e.target.value);
+                                }}
+                                className="w-24 px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
+                              />
+                            </td>
+                            <td className="py-2 font-medium">{itemTotal.toFixed(2)} ج.م</td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
+                )}
+              </div>
+
+              {/* Total Amount */}
+              <div className="mt-3 p-3 bg-gray-50 rounded-lg">
+                <div className="flex justify-between items-center">
+                  <span className="font-medium text-gray-700">إجمالي مبلغ الاستلام:</span>
+                  <span className="text-xl font-bold text-gray-800">{totalReceivedAmount.toFixed(2)} ج.م</span>
+                </div>
+                {selectedCustody && (
+                  <div className="flex justify-between items-center mt-2 pt-2 border-t border-gray-200">
+                    <span className="text-sm text-gray-600">سيتم خصمه من العهدة:</span>
+                    <span className={`font-medium ${totalReceivedAmount > custodyRemainingAmount ? 'text-red-600' : 'text-green-600'}`}>
+                      {totalReceivedAmount.toFixed(2)} ج.م
+                    </span>
+                  </div>
                 )}
               </div>
             </div>
@@ -416,10 +556,51 @@ export function GoodsReceipt() {
                 <p className="text-gray-800">{viewingGRN.poNumber}</p>
               </div>
               <div>
+                <label className="text-sm font-medium text-gray-600">المورد</label>
+                <p className="text-gray-800">{viewingGRN.supplierName || '-'}</p>
+              </div>
+              <div>
                 <label className="text-sm font-medium text-gray-600">تاريخ الاستلام</label>
                 <p className="text-gray-800">{viewingGRN.receivingDate}</p>
               </div>
+              <div>
+                <label className="text-sm font-medium text-gray-600">إجمالي مبلغ الاستلام</label>
+                <p className="text-gray-800 font-medium">
+                  {viewingGRN.totalReceivedAmount 
+                    ? `${parseFloat(viewingGRN.totalReceivedAmount).toFixed(2)} ج.م` 
+                    : '-'}
+                </p>
+              </div>
             </div>
+
+            {/* Custody Deduction Info */}
+            {viewingGRN.custodyDeduction && (
+              <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                <h4 className="font-medium text-green-800 mb-2">تم الخصم من العهدة</h4>
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <span className="text-gray-600">رقم العهدة:</span>{' '}
+                    <span className="font-medium">{viewingGRN.custodyDeduction.custodyNumber}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">الموظف:</span>{' '}
+                    <span className="font-medium">{viewingGRN.custodyDeduction.employeeName}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">المبلغ المخصوم:</span>{' '}
+                    <span className="font-medium text-red-600">
+                      {viewingGRN.custodyDeduction.amountDeducted.toFixed(2)} ج.م
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">المتبقي بعد الخصم:</span>{' '}
+                    <span className="font-medium text-green-600">
+                      {viewingGRN.custodyDeduction.remainingAfterDeduction.toFixed(2)} ج.م
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div>
               <label className="text-sm font-medium text-gray-600 mb-2">العناصر المستلمة</label>
@@ -428,6 +609,8 @@ export function GoodsReceipt() {
                   <tr>
                     <th className="px-3 py-2 text-right">اسم العنصر</th>
                     <th className="px-3 py-2 text-right">الكمية المستلمة</th>
+                    <th className="px-3 py-2 text-right">السعر</th>
+                    <th className="px-3 py-2 text-right">الإجمالي</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -435,6 +618,10 @@ export function GoodsReceipt() {
                     <tr key={idx} className="border-t">
                       <td className="px-3 py-2">{item.itemName}</td>
                       <td className="px-3 py-2">{item.receivedQuantity}</td>
+                      <td className="px-3 py-2">{item.price ? `${parseFloat(item.price).toFixed(2)} ج.م` : '-'}</td>
+                      <td className="px-3 py-2 font-medium">
+                        {item.totalAmount ? `${parseFloat(item.totalAmount).toFixed(2)} ج.م` : '-'}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

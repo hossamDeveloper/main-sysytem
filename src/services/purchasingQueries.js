@@ -179,6 +179,7 @@ export const useCreateGoodsReceipt = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['goodsReceipts'] });
       queryClient.invalidateQueries({ queryKey: ['purchaseOrders'] });
+      queryClient.invalidateQueries({ queryKey: ['custodies'] }); // Invalidate custodies to reflect deduction
       queryClient.invalidateQueries({ queryKey: ['dashboardStats'] });
     },
   });

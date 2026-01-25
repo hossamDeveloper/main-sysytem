@@ -350,35 +350,103 @@ export const purchasingApi = {
   createGoodsReceipt: async (grnData) => {
     await delay(800);
     const grns = getStoredData('goodsReceipts');
+    const pos = getStoredData('purchaseOrders');
+    const custodies = getStoredData('custodies');
+    
+    // Get the purchase order
+    const po = pos.find((p) => p.id === grnData.poId);
+    if (!po) {
+      throw new Error('Purchase Order not found');
+    }
+
+    // Calculate total amount received
+    const receivedItems = grnData.items || [];
+    let totalReceivedAmount = 0;
+    receivedItems.forEach((grnItem) => {
+      const poItem = po.items.find((item) => item.id === grnItem.itemId);
+      if (poItem) {
+        totalReceivedAmount += (grnItem.receivedQuantity || 0) * (poItem.price || 0);
+      }
+    });
+
+    // Check if PO has a custody linked and deduct from it
+    let custodyDeduction = null;
+    if (po.custodyId) {
+      const custodyIndex = custodies.findIndex((c) => c.id === po.custodyId);
+      if (custodyIndex !== -1) {
+        const custody = custodies[custodyIndex];
+        const currentSpent = parseFloat(custody.spentAmount) || 0;
+        const currentRemaining = parseFloat(custody.remainingAmount) || (parseFloat(custody.amount) - currentSpent);
+        
+        if (totalReceivedAmount > currentRemaining) {
+          throw new Error(`مبلغ الاستلام (${totalReceivedAmount.toFixed(2)}) أكبر من المتبقي في العهدة (${currentRemaining.toFixed(2)})`);
+        }
+
+        // Update custody spent and remaining amounts
+        custodies[custodyIndex].spentAmount = currentSpent + totalReceivedAmount;
+        custodies[custodyIndex].remainingAmount = currentRemaining - totalReceivedAmount;
+        custodies[custodyIndex].updatedAt = new Date().toISOString();
+        
+        saveData('custodies', custodies);
+
+        custodyDeduction = {
+          custodyId: custody.id,
+          custodyNumber: custody.custodyNumber,
+          employeeName: custody.employeeName,
+          amountDeducted: totalReceivedAmount,
+          remainingAfterDeduction: currentRemaining - totalReceivedAmount,
+        };
+      }
+    }
+
     const grnNumber = `GRN-${new Date().getFullYear()}-${String(grns.length + 1).padStart(4, '0')}`;
     const newGRN = {
       id: generateId('GRN'),
       grnNumber,
       ...grnData,
+      poNumber: po.poNumber,
+      supplierName: po.supplierName,
+      totalReceivedAmount,
+      custodyDeduction, // Include custody deduction info
       receivingDate: grnData.receivingDate || new Date().toISOString().split('T')[0],
-      items: grnData.items || [],
+      items: receivedItems.map((item) => {
+        const poItem = po.items.find((pi) => pi.id === item.itemId);
+        return {
+          ...item,
+          price: poItem?.price || 0,
+          totalAmount: (item.receivedQuantity || 0) * (poItem?.price || 0),
+        };
+      }),
       createdAt: new Date().toISOString(),
     };
     grns.push(newGRN);
     saveData('goodsReceipts', grns);
 
-    // Update PO received quantities
+    // Update PO received quantities and status
     if (grnData.poId) {
-      const pos = getStoredData('purchaseOrders');
       const poIndex = pos.findIndex((p) => p.id === grnData.poId);
       if (poIndex !== -1) {
-        const po = pos[poIndex];
-        const allItemsReceived = po.items.every((item) => {
-          const grnItems = grnData.items || [];
-          const grnItem = grnItems.find((gi) => gi.itemId === item.id);
-          const receivedQty = (grnItem?.receivedQuantity || 0) + (item.receivedQuantity || 0);
-          return receivedQty >= item.quantity;
+        // Update received quantities in PO items
+        pos[poIndex].items = pos[poIndex].items.map((item) => {
+          const grnItem = receivedItems.find((gi) => gi.itemId === item.id);
+          const prevReceived = item.receivedQuantity || 0;
+          const newReceived = prevReceived + (grnItem?.receivedQuantity || 0);
+          return {
+            ...item,
+            receivedQuantity: newReceived,
+          };
         });
+
+        const allItemsReceived = pos[poIndex].items.every(
+          (item) => (item.receivedQuantity || 0) >= item.quantity
+        );
+        
         if (allItemsReceived) {
           pos[poIndex].status = 'Completed';
         } else {
           pos[poIndex].status = 'Partially Received';
         }
+        pos[poIndex].updatedAt = new Date().toISOString();
         saveData('purchaseOrders', pos);
       }
     }
@@ -785,11 +853,14 @@ export const purchasingApi = {
     await delay(800);
     const custodies = getStoredData('custodies');
     const custodyNumber = `CST-${new Date().getFullYear()}-${String(custodies.length + 1).padStart(4, '0')}`;
+    const amount = parseFloat(custodyData.amount) || 0;
     const newCustody = {
       id: generateId('CST'),
       custodyNumber,
       ...custodyData,
-      amount: parseFloat(custodyData.amount) || 0,
+      amount,
+      spentAmount: 0, // Track spent amount
+      remainingAmount: amount, // Track remaining amount
       status: 'Issued',
       issueDate: custodyData.issueDate || new Date().toISOString().split('T')[0],
       createdAt: new Date().toISOString(),

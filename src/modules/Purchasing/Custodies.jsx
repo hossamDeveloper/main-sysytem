@@ -4,6 +4,9 @@ import {
   useCreateCustody,
   useUpdateCustody,
   useCloseCustody,
+  useDeleteCustody,
+  usePurchaseOrders,
+  useGoodsReceipts,
 } from '../../services/purchasingQueries';
 import { useERPStorage } from '../../hooks/useERPStorage';
 import { Modal } from '../../components/Modal';
@@ -16,17 +19,57 @@ export function Custodies() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [dateFilterType, setDateFilterType] = useState(''); // 'day', 'month', 'year', ''
+  const [dateFilterValue, setDateFilterValue] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isCloseModalOpen, setIsCloseModalOpen] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isPurchasesModalOpen, setIsPurchasesModalOpen] = useState(false);
   const [editingCustody, setEditingCustody] = useState(null);
   const [custodyToClose, setCustodyToClose] = useState(null);
+  const [custodyToDelete, setCustodyToDelete] = useState(null);
+  const [viewingCustodyPurchases, setViewingCustodyPurchases] = useState(null);
   const [toast, setToast] = useState(null);
 
-  const { data, isLoading } = useCustodies({ page, limit: 10, search, status: statusFilter });
+  // Calculate date filters
+  const dateFilters = useMemo(() => {
+    if (!dateFilterType || !dateFilterValue) return {};
+    
+    if (dateFilterType === 'day') {
+      return { dateFrom: dateFilterValue, dateTo: dateFilterValue };
+    } else if (dateFilterType === 'month') {
+      // dateFilterValue format: YYYY-MM
+      const [year, month] = dateFilterValue.split('-');
+      // Get last day of month
+      const lastDay = new Date(parseInt(year), parseInt(month), 0).getDate();
+      return {
+        dateFrom: `${dateFilterValue}-01`,
+        dateTo: `${dateFilterValue}-${String(lastDay).padStart(2, '0')}`,
+      };
+    } else if (dateFilterType === 'year') {
+      // dateFilterValue format: YYYY
+      return {
+        dateFrom: `${dateFilterValue}-01-01`,
+        dateTo: `${dateFilterValue}-12-31`,
+      };
+    }
+    return {};
+  }, [dateFilterType, dateFilterValue]);
+
+  const { data, isLoading } = useCustodies({
+    page,
+    limit: 10,
+    search,
+    status: statusFilter,
+    ...dateFilters,
+  });
   const { data: employees } = useERPStorage('employees');
+  const { data: allPurchaseOrders } = usePurchaseOrders({ limit: 10000 });
+  const { data: allGoodsReceipts } = useGoodsReceipts({ limit: 10000 });
   const createMutation = useCreateCustody();
   const updateMutation = useUpdateCustody();
   const closeMutation = useCloseCustody();
+  const deleteMutation = useDeleteCustody();
 
   const [formData, setFormData] = useState({
     title: '',
@@ -133,6 +176,57 @@ export function Custodies() {
       }
     }
   };
+
+  const handleDelete = (custody) => {
+    setCustodyToDelete(custody);
+    setIsDeleteModalOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (custodyToDelete) {
+      try {
+        await deleteMutation.mutateAsync(custodyToDelete.id);
+        showToast('تم حذف العهدة بنجاح');
+        setCustodyToDelete(null);
+        setIsDeleteModalOpen(false);
+      } catch (error) {
+        showToast(error.message || 'حدث خطأ أثناء الحذف', 'error');
+      }
+    }
+  };
+
+  const handleViewPurchases = (custody) => {
+    setViewingCustodyPurchases(custody);
+    setIsPurchasesModalOpen(true);
+  };
+
+  // Calculate purchases for viewing custody
+  const custodyPurchases = useMemo(() => {
+    if (!viewingCustodyPurchases || !allPurchaseOrders?.data || !allGoodsReceipts?.data) {
+      return { purchaseOrders: [], goodsReceipts: [], totalPurchased: 0 };
+    }
+
+    const custodyId = viewingCustodyPurchases.id;
+    
+    // Get purchase orders linked to this custody
+    const purchaseOrders = (allPurchaseOrders.data || []).filter(
+      (po) => po.custodyId === custodyId
+    );
+
+    // Get goods receipts linked to these purchase orders
+    const poIds = purchaseOrders.map((po) => po.id);
+    const goodsReceipts = (allGoodsReceipts.data || []).filter((grn) =>
+      poIds.includes(grn.poId)
+    );
+
+    // Calculate total purchased amount
+    const totalPurchased = goodsReceipts.reduce(
+      (sum, grn) => sum + (parseFloat(grn.totalReceivedAmount) || 0),
+      0
+    );
+
+    return { purchaseOrders, goodsReceipts, totalPurchased };
+  }, [viewingCustodyPurchases, allPurchaseOrders?.data, allGoodsReceipts?.data]);
 
   // Calculate employee statistics
   const employeeStats = useMemo(() => {
@@ -249,29 +343,101 @@ export function Custodies() {
       </div>
 
       {/* Filters */}
-      <div className="bg-white rounded-lg shadow p-4 flex gap-4">
-        <input
-          type="text"
-          placeholder="بحث..."
-          value={search}
-          onChange={(e) => {
-            setSearch(e.target.value);
-            setPage(1);
-          }}
-          className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
-        />
-        <select
-          value={statusFilter}
-          onChange={(e) => {
-            setStatusFilter(e.target.value);
-            setPage(1);
-          }}
-          className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
-        >
-          <option value="">جميع الحالات</option>
-          <option value="Issued">مصروفة</option>
-          <option value="Closed">مغلقة</option>
-        </select>
+      <div className="bg-white rounded-lg shadow p-4 space-y-4">
+        <div className="flex gap-4">
+          <input
+            type="text"
+            placeholder="بحث..."
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(1);
+            }}
+            className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+          />
+          <select
+            value={statusFilter}
+            onChange={(e) => {
+              setStatusFilter(e.target.value);
+              setPage(1);
+            }}
+            className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+          >
+            <option value="">جميع الحالات</option>
+            <option value="Issued">مصروفة</option>
+            <option value="Closed">مغلقة</option>
+          </select>
+        </div>
+
+        {/* Date Filters */}
+        <div className="flex gap-4 items-end">
+          <select
+            value={dateFilterType}
+            onChange={(e) => {
+              setDateFilterType(e.target.value);
+              setDateFilterValue('');
+              setPage(1);
+            }}
+            className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+          >
+            <option value="">بدون فلترة زمنية</option>
+            <option value="day">يوم محدد</option>
+            <option value="month">شهر محدد</option>
+            <option value="year">سنة محددة</option>
+          </select>
+
+          {dateFilterType === 'day' && (
+            <input
+              type="date"
+              value={dateFilterValue}
+              onChange={(e) => {
+                setDateFilterValue(e.target.value);
+                setPage(1);
+              }}
+              className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+            />
+          )}
+
+          {dateFilterType === 'month' && (
+            <input
+              type="month"
+              value={dateFilterValue}
+              onChange={(e) => {
+                setDateFilterValue(e.target.value);
+                setPage(1);
+              }}
+              className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+            />
+          )}
+
+          {dateFilterType === 'year' && (
+            <input
+              type="number"
+              min="2000"
+              max="2100"
+              placeholder="السنة (مثال: 2024)"
+              value={dateFilterValue}
+              onChange={(e) => {
+                setDateFilterValue(e.target.value);
+                setPage(1);
+              }}
+              className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+            />
+          )}
+
+          {dateFilterType && (
+            <button
+              onClick={() => {
+                setDateFilterType('');
+                setDateFilterValue('');
+                setPage(1);
+              }}
+              className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+            >
+              إلغاء الفلترة
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Table */}
@@ -288,18 +454,16 @@ export function Custodies() {
                     {col.label}
                   </th>
                 ))}
-                {(permissions.edit || permissions.delete) && (
-                  <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700">
-                    الإجراءات
-                  </th>
-                )}
+                <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700">
+                  الإجراءات
+                </th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-100">
               {isLoading ? (
                 <tr>
                   <td
-                    colSpan={columns.length + (permissions.edit || permissions.delete ? 1 : 0)}
+                    colSpan={columns.length + 1}
                     className="px-4 py-6 text-center text-gray-500"
                   >
                     جاري التحميل...
@@ -308,7 +472,7 @@ export function Custodies() {
               ) : data?.data?.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={columns.length + (permissions.edit || permissions.delete ? 1 : 0)}
+                    colSpan={columns.length + 1}
                     className="px-4 py-6 text-center text-gray-500"
                   >
                     لا توجد بيانات للعرض
@@ -329,28 +493,40 @@ export function Custodies() {
                         </td>
                       );
                     })}
-                    {(permissions.edit || permissions.delete) && (
-                      <td className="px-4 py-3 text-sm text-gray-800 whitespace-nowrap">
-                        <div className="flex gap-2 justify-start">
-                          {permissions.edit && row.status === 'Issued' && (
-                            <button
-                              onClick={() => handleOpenEdit(row)}
-                              className="px-3 py-1 bg-sky-600 text-white rounded-lg hover:bg-sky-700 text-sm"
-                            >
-                              تعديل
-                            </button>
-                          )}
-                          {row.status === 'Issued' && (
-                            <button
-                              onClick={() => handleClose(row)}
-                              className="px-3 py-1 bg-gray-600 text-white rounded-lg hover:bg-gray-700 text-sm"
-                            >
-                              إغلاق
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    )}
+                    <td className="px-4 py-3 text-sm text-gray-800 whitespace-nowrap">
+                      <div className="flex gap-2 justify-start">
+                        <button
+                          onClick={() => handleViewPurchases(row)}
+                          className="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
+                        >
+                          المشتريات
+                        </button>
+                        {permissions.edit && row.status === 'Issued' && (
+                          <button
+                            onClick={() => handleOpenEdit(row)}
+                            className="px-3 py-1 bg-sky-600 text-white rounded-lg hover:bg-sky-700 text-sm"
+                          >
+                            تعديل
+                          </button>
+                        )}
+                        {row.status === 'Issued' && (
+                          <button
+                            onClick={() => handleClose(row)}
+                            className="px-3 py-1 bg-gray-600 text-white rounded-lg hover:bg-gray-700 text-sm"
+                          >
+                            إغلاق
+                          </button>
+                        )}
+                        {permissions.delete && (
+                          <button
+                            onClick={() => handleDelete(row)}
+                            className="px-3 py-1 bg-rose-600 text-white rounded-lg hover:bg-rose-700 text-sm"
+                          >
+                            حذف
+                          </button>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                 ))
               )}
@@ -508,6 +684,216 @@ export function Custodies() {
         confirmText="إغلاق"
         cancelText="إلغاء"
       />
+
+      {/* Delete Confirmation Modal */}
+      <ConfirmModal
+        isOpen={isDeleteModalOpen}
+        onClose={() => setIsDeleteModalOpen(false)}
+        onConfirm={confirmDelete}
+        title="تأكيد الحذف"
+        message={`هل أنت متأكد من حذف العهدة "${custodyToDelete?.custodyNumber}"؟`}
+        confirmText="حذف"
+        cancelText="إلغاء"
+        danger
+      />
+
+      {/* Purchases Modal */}
+      {viewingCustodyPurchases && (
+        <Modal
+          isOpen={isPurchasesModalOpen}
+          onClose={() => {
+            setIsPurchasesModalOpen(false);
+            setViewingCustodyPurchases(null);
+          }}
+          title={`مشتريات العهدة: ${viewingCustodyPurchases.custodyNumber}`}
+          size="lg"
+        >
+          <div className="space-y-6">
+            {/* Custody Summary */}
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <span className="text-gray-600">الموظف:</span>{' '}
+                  <span className="font-medium">
+                    {viewingCustodyPurchases.employeeName ||
+                      (viewingCustodyPurchases.employeeId && employees
+                        ? employees.find((e) => e.id === viewingCustodyPurchases.employeeId)?.name ||
+                          viewingCustodyPurchases.employeeId
+                        : viewingCustodyPurchases.employeeId || '-')}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-gray-600">إجمالي العهدة:</span>{' '}
+                  <span className="font-medium">
+                    {parseFloat(viewingCustodyPurchases.amount || 0).toFixed(2)} ج.م
+                  </span>
+                </div>
+                <div>
+                  <span className="text-gray-600">المصروف:</span>{' '}
+                  <span className="font-medium text-red-600">
+                    {parseFloat(viewingCustodyPurchases.spentAmount || 0).toFixed(2)} ج.م
+                  </span>
+                </div>
+                <div>
+                  <span className="text-gray-600">المتبقي:</span>{' '}
+                  <span className="font-medium text-green-600">
+                    {parseFloat(
+                      viewingCustodyPurchases.remainingAmount !== undefined
+                        ? viewingCustodyPurchases.remainingAmount
+                        : parseFloat(viewingCustodyPurchases.amount || 0) -
+                            parseFloat(viewingCustodyPurchases.spentAmount || 0)
+                    ).toFixed(2)}{' '}
+                    ج.م
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Purchase Orders */}
+            <div>
+              <h3 className="text-lg font-semibold text-gray-800 mb-3">
+                أوامر الشراء ({custodyPurchases.purchaseOrders.length})
+              </h3>
+              {custodyPurchases.purchaseOrders.length === 0 ? (
+                <p className="text-gray-500 text-sm">لا توجد أوامر شراء مرتبطة بهذه العهدة</p>
+              ) : (
+                <div className="space-y-3">
+                  {custodyPurchases.purchaseOrders.map((po) => (
+                    <div
+                      key={po.id}
+                      className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50"
+                    >
+                      <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <p className="font-medium text-gray-800">{po.poNumber}</p>
+                          <p className="text-sm text-gray-600">المورد: {po.supplierName}</p>
+                          <p className="text-sm text-gray-600">
+                            تاريخ التسليم: {po.deliveryDate}
+                          </p>
+                        </div>
+                        <div className="text-left">
+                          <p className="font-medium text-gray-800">
+                            {parseFloat(po.totalAmount || 0).toFixed(2)} ج.م
+                          </p>
+                          <span
+                            className={`px-2 py-1 rounded text-xs ${
+                              po.status === 'Completed'
+                                ? 'bg-green-100 text-green-800'
+                                : po.status === 'Partially Received'
+                                  ? 'bg-yellow-100 text-yellow-800'
+                                  : 'bg-blue-100 text-blue-800'
+                            }`}
+                          >
+                            {po.status === 'Completed'
+                              ? 'مكتمل'
+                              : po.status === 'Partially Received'
+                                ? 'مستلم جزئياً'
+                                : 'مفتوح'}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="mt-2">
+                        <p className="text-sm text-gray-600">العناصر:</p>
+                        <ul className="list-disc list-inside text-sm text-gray-700 mt-1">
+                          {po.items?.slice(0, 3).map((item, idx) => (
+                            <li key={idx}>
+                              {item.itemName} - {item.quantity} × {item.price} ج.م
+                            </li>
+                          ))}
+                          {po.items?.length > 3 && (
+                            <li className="text-gray-500">... و {po.items.length - 3} عنصر آخر</li>
+                          )}
+                        </ul>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Goods Receipts */}
+            <div>
+              <h3 className="text-lg font-semibold text-gray-800 mb-3">
+                استلام البضائع ({custodyPurchases.goodsReceipts.length})
+              </h3>
+              {custodyPurchases.goodsReceipts.length === 0 ? (
+                <p className="text-gray-500 text-sm">لا توجد استلامات بضائع مرتبطة بهذه العهدة</p>
+              ) : (
+                <div className="space-y-3">
+                  {custodyPurchases.goodsReceipts.map((grn) => (
+                    <div
+                      key={grn.id}
+                      className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50"
+                    >
+                      <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <p className="font-medium text-gray-800">{grn.grnNumber}</p>
+                          <p className="text-sm text-gray-600">
+                            أمر الشراء: {grn.poNumber}
+                          </p>
+                          <p className="text-sm text-gray-600">
+                            تاريخ الاستلام: {grn.receivingDate}
+                          </p>
+                        </div>
+                        <div className="text-left">
+                          <p className="font-medium text-green-600">
+                            {parseFloat(grn.totalReceivedAmount || 0).toFixed(2)} ج.م
+                          </p>
+                          {grn.custodyDeduction && (
+                            <p className="text-xs text-red-600 mt-1">
+                              خُصم من العهدة
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      {grn.custodyDeduction && (
+                        <div className="mt-2 p-2 bg-green-50 rounded text-sm">
+                          <p className="text-gray-700">
+                            تم خصم {parseFloat(grn.custodyDeduction.amountDeducted || 0).toFixed(2)}{' '}
+                            ج.م من العهدة
+                          </p>
+                          <p className="text-gray-600">
+                            المتبقي بعد الخصم:{' '}
+                            {parseFloat(grn.custodyDeduction.remainingAfterDeduction || 0).toFixed(2)}{' '}
+                            ج.م
+                          </p>
+                        </div>
+                      )}
+                      <div className="mt-2">
+                        <p className="text-sm text-gray-600">العناصر المستلمة:</p>
+                        <ul className="list-disc list-inside text-sm text-gray-700 mt-1">
+                          {grn.items?.slice(0, 3).map((item, idx) => (
+                            <li key={idx}>
+                              {item.itemName} - {item.receivedQuantity} قطعة
+                            </li>
+                          ))}
+                          {grn.items?.length > 3 && (
+                            <li className="text-gray-500">
+                              ... و {grn.items.length - 3} عنصر آخر
+                            </li>
+                          )}
+                        </ul>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Total Summary */}
+            {custodyPurchases.goodsReceipts.length > 0 && (
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                <div className="flex justify-between items-center">
+                  <span className="font-medium text-gray-700">إجمالي المشتريات:</span>
+                  <span className="text-xl font-bold text-green-600">
+                    {custodyPurchases.totalPurchased.toFixed(2)} ج.م
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
 
       {toast && (
         <Toast

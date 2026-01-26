@@ -21,6 +21,8 @@ export function PurchaseOrders() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [dateFilterType, setDateFilterType] = useState(''); // 'day', 'month', 'year', ''
+  const [dateFilterValue, setDateFilterValue] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
@@ -49,7 +51,38 @@ export function PurchaseOrders() {
   const [itemInputMode, setItemInputMode] = useState('manual'); // 'manual' or 'product'
   const [selectedProductId, setSelectedProductId] = useState('');
 
-  const { data, isLoading } = usePurchaseOrders({ page, limit: 10, search, status: statusFilter });
+  // Calculate date filters
+  const dateFilters = useMemo(() => {
+    if (!dateFilterType || !dateFilterValue) return {};
+    
+    if (dateFilterType === 'day') {
+      return { dateFrom: dateFilterValue, dateTo: dateFilterValue };
+    } else if (dateFilterType === 'month') {
+      // dateFilterValue format: YYYY-MM
+      const [year, month] = dateFilterValue.split('-');
+      // Get last day of month
+      const lastDay = new Date(parseInt(year), parseInt(month), 0).getDate();
+      return {
+        dateFrom: `${dateFilterValue}-01`,
+        dateTo: `${dateFilterValue}-${String(lastDay).padStart(2, '0')}`,
+      };
+    } else if (dateFilterType === 'year') {
+      // dateFilterValue format: YYYY
+      return {
+        dateFrom: `${dateFilterValue}-01-01`,
+        dateTo: `${dateFilterValue}-12-31`,
+      };
+    }
+    return {};
+  }, [dateFilterType, dateFilterValue]);
+
+  const { data, isLoading } = usePurchaseOrders({
+    page,
+    limit: 10,
+    search,
+    status: statusFilter,
+    ...dateFilters,
+  });
   const { data: suppliersData } = useSuppliers({ limit: 1000 });
   const { data: openCustodiesData } = useCustodies({ limit: 1000, status: 'Issued' });
   const { data: productsData } = useProducts({ limit: 1000 });
@@ -380,31 +413,103 @@ export function PurchaseOrders() {
       </div>
 
       {/* Filters */}
-      <div className="bg-white rounded-lg shadow p-4 flex gap-4">
-        <input
-          type="text"
-          placeholder="بحث..."
-          value={search}
-          onChange={(e) => {
-            setSearch(e.target.value);
-            setPage(1);
-          }}
-          className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
-        />
-        <select
-          value={statusFilter}
-          onChange={(e) => {
-            setStatusFilter(e.target.value);
-            setPage(1);
-          }}
-          className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
-        >
-          <option value="">جميع الحالات</option>
-          <option value="Open">مفتوح</option>
-          <option value="Partially Received">مستلم جزئياً</option>
-          <option value="Completed">مكتمل</option>
-          <option value="Cancelled">ملغي</option>
-        </select>
+      <div className="bg-white rounded-lg shadow p-4 space-y-4">
+        <div className="flex gap-4">
+          <input
+            type="text"
+            placeholder="بحث..."
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(1);
+            }}
+            className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+          />
+          <select
+            value={statusFilter}
+            onChange={(e) => {
+              setStatusFilter(e.target.value);
+              setPage(1);
+            }}
+            className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+          >
+            <option value="">جميع الحالات</option>
+            <option value="Open">مفتوح</option>
+            <option value="Partially Received">مستلم جزئياً</option>
+            <option value="Completed">مكتمل</option>
+            <option value="Cancelled">ملغي</option>
+          </select>
+        </div>
+
+        {/* Date Filters */}
+        <div className="flex gap-4 items-end">
+          <select
+            value={dateFilterType}
+            onChange={(e) => {
+              setDateFilterType(e.target.value);
+              setDateFilterValue('');
+              setPage(1);
+            }}
+            className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+          >
+            <option value="">بدون فلترة زمنية</option>
+            <option value="day">يوم محدد</option>
+            <option value="month">شهر محدد</option>
+            <option value="year">سنة محددة</option>
+          </select>
+
+          {dateFilterType === 'day' && (
+            <input
+              type="date"
+              value={dateFilterValue}
+              onChange={(e) => {
+                setDateFilterValue(e.target.value);
+                setPage(1);
+              }}
+              className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+            />
+          )}
+
+          {dateFilterType === 'month' && (
+            <input
+              type="month"
+              value={dateFilterValue}
+              onChange={(e) => {
+                setDateFilterValue(e.target.value);
+                setPage(1);
+              }}
+              className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+            />
+          )}
+
+          {dateFilterType === 'year' && (
+            <input
+              type="number"
+              min="2000"
+              max="2100"
+              placeholder="السنة (مثال: 2024)"
+              value={dateFilterValue}
+              onChange={(e) => {
+                setDateFilterValue(e.target.value);
+                setPage(1);
+              }}
+              className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+            />
+          )}
+
+          {dateFilterType && (
+            <button
+              onClick={() => {
+                setDateFilterType('');
+                setDateFilterValue('');
+                setPage(1);
+              }}
+              className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+            >
+              إلغاء الفلترة
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Table */}

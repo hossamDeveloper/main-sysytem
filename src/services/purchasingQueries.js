@@ -185,6 +185,32 @@ export const useCreateGoodsReceipt = () => {
   });
 };
 
+export const useUpdateGoodsReceipt = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }) => purchasingApi.updateGoodsReceipt(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['goodsReceipts'] });
+      queryClient.invalidateQueries({ queryKey: ['purchaseOrders'] });
+      queryClient.invalidateQueries({ queryKey: ['custodies'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboardStats'] });
+    },
+  });
+};
+
+export const useDeleteGoodsReceipt = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id) => purchasingApi.deleteGoodsReceipt(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['goodsReceipts'] });
+      queryClient.invalidateQueries({ queryKey: ['purchaseOrders'] });
+      queryClient.invalidateQueries({ queryKey: ['custodies'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboardStats'] });
+    },
+  });
+};
+
 // ========== Invoices ==========
 export const useInvoices = (params = {}) => {
   return useQuery({
@@ -405,6 +431,17 @@ export const useCloseCustody = () => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id) => purchasingApi.closeCustody(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['custodies'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboardStats'] });
+    },
+  });
+};
+
+export const useDeleteCustody = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id) => purchasingApi.deleteCustody(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['custodies'] });
       queryClient.invalidateQueries({ queryKey: ['dashboardStats'] });

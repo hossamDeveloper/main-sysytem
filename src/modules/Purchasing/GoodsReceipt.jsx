@@ -4,8 +4,11 @@ import {
   usePurchaseOrders,
   useCustodies,
   useCreateGoodsReceipt,
+  useUpdateGoodsReceipt,
+  useDeleteGoodsReceipt,
 } from '../../services/purchasingQueries';
 import { Modal } from '../../components/Modal';
+import { ConfirmModal } from '../../components/ConfirmModal';
 import { Toast } from '../../components/Toast';
 import { useModulePermissions } from '../../hooks/usePermissions';
 
@@ -13,16 +16,54 @@ export function GoodsReceipt() {
   const permissions = useModulePermissions('purchasing');
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
+  const [dateFilterType, setDateFilterType] = useState(''); // 'day', 'month', 'year', ''
+  const [dateFilterValue, setDateFilterValue] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [selectedPO, setSelectedPO] = useState(null);
   const [viewingGRN, setViewingGRN] = useState(null);
+  const [editingGRN, setEditingGRN] = useState(null);
+  const [grnToDelete, setGrnToDelete] = useState(null);
   const [toast, setToast] = useState(null);
 
-  const { data, isLoading } = useGoodsReceipts({ page, limit: 10, search });
+  // Calculate date filters
+  const dateFilters = useMemo(() => {
+    if (!dateFilterType || !dateFilterValue) return {};
+    
+    if (dateFilterType === 'day') {
+      return { dateFrom: dateFilterValue, dateTo: dateFilterValue };
+    } else if (dateFilterType === 'month') {
+      // dateFilterValue format: YYYY-MM
+      const [year, month] = dateFilterValue.split('-');
+      // Get last day of month
+      const lastDay = new Date(parseInt(year), parseInt(month), 0).getDate();
+      return {
+        dateFrom: `${dateFilterValue}-01`,
+        dateTo: `${dateFilterValue}-${String(lastDay).padStart(2, '0')}`,
+      };
+    } else if (dateFilterType === 'year') {
+      // dateFilterValue format: YYYY
+      return {
+        dateFrom: `${dateFilterValue}-01-01`,
+        dateTo: `${dateFilterValue}-12-31`,
+      };
+    }
+    return {};
+  }, [dateFilterType, dateFilterValue]);
+
+  const { data, isLoading } = useGoodsReceipts({
+    page,
+    limit: 10,
+    search,
+    ...dateFilters,
+  });
+  const { data: allGRNsData } = useGoodsReceipts({ limit: 10000 }); // Get all GRNs for calculations
   const { data: posData } = usePurchaseOrders({ limit: 1000 });
   const { data: custodiesData } = useCustodies({ limit: 1000 });
   const createMutation = useCreateGoodsReceipt();
+  const updateMutation = useUpdateGoodsReceipt();
+  const deleteMutation = useDeleteGoodsReceipt();
 
   const [formData, setFormData] = useState({
     poId: '',
@@ -92,6 +133,7 @@ export function GoodsReceipt() {
       notes: '',
     });
     setSelectedPO(null);
+    setEditingGRN(null);
     setFormErrors({});
   };
 
@@ -99,19 +141,44 @@ export function GoodsReceipt() {
     const po = posData?.data?.find((p) => p.id === poId);
     if (po) {
       setSelectedPO(po);
+      
+      // If editing, get current GRN items to pre-fill
+      const currentGRNItems = editingGRN?.items || [];
+      
+      // Get all GRNs for this PO (excluding current one if editing)
+      const otherGRNs = editingGRN
+        ? (allGRNsData?.data || []).filter((g) => g.poId === poId && g.id !== editingGRN.id)
+        : (allGRNsData?.data || []).filter((g) => g.poId === poId);
+      
       setFormData({
         ...formData,
         poId,
         items: po.items.map((item, idx) => {
           const orderedQty = item.quantity || 0;
-          const alreadyReceived = item.receivedQuantity || 0;
-          const remaining = orderedQty - alreadyReceived;
+          
+          // Calculate total received from other GRNs (excluding current if editing)
+          let receivedFromOtherGRNs = 0;
+          otherGRNs.forEach((grn) => {
+            const grnItem = grn.items?.find((gi) => gi.itemId === item.id);
+            if (grnItem) {
+              receivedFromOtherGRNs += grnItem.receivedQuantity || 0;
+            }
+          });
+          
+          // If editing, get current GRN's received quantity for this item
+          const currentGRNItem = currentGRNItems.find((gi) => gi.itemId === item.id);
+          const currentReceivedInThisGRN = currentGRNItem?.receivedQuantity || 0;
+          
+          // Calculate remaining: ordered - received from other GRNs
+          // When editing, we can change currentReceivedInThisGRN, so remaining = ordered - receivedFromOtherGRNs
+          const remaining = orderedQty - receivedFromOtherGRNs;
+          
           return {
             id: item.id || Date.now() + idx,
             itemId: item.id || Date.now() + idx,
             itemName: item.itemName,
             orderedQuantity: orderedQty,
-            receivedQuantity: 0,
+            receivedQuantity: editingGRN ? currentReceivedInThisGRN : 0,
             remainingQuantity: Math.max(0, remaining),
           };
         }),
@@ -154,6 +221,57 @@ export function GoodsReceipt() {
 
   const handleOpenAdd = () => {
     resetForm();
+    setEditingGRN(null);
+    setIsModalOpen(true);
+  };
+
+  const handleOpenEdit = (grn) => {
+    const po = posData?.data?.find((p) => p.id === grn.poId);
+    if (!po) {
+      showToast('لم يتم العثور على أمر الشراء', 'error');
+      return;
+    }
+
+    setEditingGRN(grn);
+    setSelectedPO(po);
+    
+    // Get all GRNs for this PO (excluding current one)
+    const otherGRNs = (allGRNsData?.data || []).filter((g) => g.poId === grn.poId && g.id !== grn.id);
+    const currentGRNItems = grn.items || [];
+    
+    setFormData({
+      poId: grn.poId,
+      receivingDate: grn.receivingDate || new Date().toISOString().split('T')[0],
+      items: po.items.map((item, idx) => {
+        const orderedQty = item.quantity || 0;
+        
+        // Calculate total received from other GRNs
+        let receivedFromOtherGRNs = 0;
+        otherGRNs.forEach((otherGRN) => {
+          const grnItem = otherGRN.items?.find((gi) => gi.itemId === item.id);
+          if (grnItem) {
+            receivedFromOtherGRNs += grnItem.receivedQuantity || 0;
+          }
+        });
+        
+        // Get current GRN's received quantity for this item
+        const currentGRNItem = currentGRNItems.find((gi) => gi.itemId === item.id);
+        const currentReceivedInThisGRN = currentGRNItem?.receivedQuantity || 0;
+        
+        // Calculate remaining: ordered - received from other GRNs
+        const remaining = orderedQty - receivedFromOtherGRNs;
+        
+        return {
+          id: item.id || Date.now() + idx,
+          itemId: item.id || Date.now() + idx,
+          itemName: item.itemName,
+          orderedQuantity: orderedQty,
+          receivedQuantity: currentReceivedInThisGRN,
+          remainingQuantity: Math.max(0, remaining),
+        };
+      }),
+      notes: grn.notes || '',
+    });
     setIsModalOpen(true);
   };
 
@@ -162,13 +280,39 @@ export function GoodsReceipt() {
     setIsViewModalOpen(true);
   };
 
+  const handleDelete = (grn) => {
+    setGrnToDelete(grn);
+    setIsDeleteModalOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (grnToDelete) {
+      try {
+        await deleteMutation.mutateAsync(grnToDelete.id);
+        showToast('تم حذف استلام البضائع بنجاح وتم إرجاع المبلغ للعهدة');
+        setGrnToDelete(null);
+        setIsDeleteModalOpen(false);
+      } catch (error) {
+        showToast(error.message || 'حدث خطأ أثناء الحذف', 'error');
+      }
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!validateForm()) return;
 
     try {
-      await createMutation.mutateAsync(formData);
-      showToast('تم تسجيل استلام البضائع بنجاح');
+      if (editingGRN) {
+        await updateMutation.mutateAsync({
+          id: editingGRN.id,
+          data: formData,
+        });
+        showToast('تم تحديث استلام البضائع بنجاح');
+      } else {
+        await createMutation.mutateAsync(formData);
+        showToast('تم تسجيل استلام البضائع بنجاح');
+      }
       setIsModalOpen(false);
       resetForm();
     } catch (error) {
@@ -228,17 +372,89 @@ export function GoodsReceipt() {
       </div>
 
       {/* Filters */}
-      <div className="bg-white rounded-lg shadow p-4">
-        <input
-          type="text"
-          placeholder="بحث..."
-          value={search}
-          onChange={(e) => {
-            setSearch(e.target.value);
-            setPage(1);
-          }}
-          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
-        />
+      <div className="bg-white rounded-lg shadow p-4 space-y-4">
+        <div>
+          <input
+            type="text"
+            placeholder="بحث..."
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(1);
+            }}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+          />
+        </div>
+
+        {/* Date Filters */}
+        <div className="flex gap-4 items-end">
+          <select
+            value={dateFilterType}
+            onChange={(e) => {
+              setDateFilterType(e.target.value);
+              setDateFilterValue('');
+              setPage(1);
+            }}
+            className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+          >
+            <option value="">بدون فلترة زمنية</option>
+            <option value="day">يوم محدد</option>
+            <option value="month">شهر محدد</option>
+            <option value="year">سنة محددة</option>
+          </select>
+
+          {dateFilterType === 'day' && (
+            <input
+              type="date"
+              value={dateFilterValue}
+              onChange={(e) => {
+                setDateFilterValue(e.target.value);
+                setPage(1);
+              }}
+              className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+            />
+          )}
+
+          {dateFilterType === 'month' && (
+            <input
+              type="month"
+              value={dateFilterValue}
+              onChange={(e) => {
+                setDateFilterValue(e.target.value);
+                setPage(1);
+              }}
+              className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+            />
+          )}
+
+          {dateFilterType === 'year' && (
+            <input
+              type="number"
+              min="2000"
+              max="2100"
+              placeholder="السنة (مثال: 2024)"
+              value={dateFilterValue}
+              onChange={(e) => {
+                setDateFilterValue(e.target.value);
+                setPage(1);
+              }}
+              className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+            />
+          )}
+
+          {dateFilterType && (
+            <button
+              onClick={() => {
+                setDateFilterType('');
+                setDateFilterValue('');
+                setPage(1);
+              }}
+              className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+            >
+              إلغاء الفلترة
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Table */}
@@ -255,18 +471,16 @@ export function GoodsReceipt() {
                     {col.label}
                   </th>
                 ))}
-                {permissions.view && (
-                  <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700">
-                    الإجراءات
-                  </th>
-                )}
+                <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700">
+                  الإجراءات
+                </th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-100">
               {isLoading ? (
                 <tr>
                   <td
-                    colSpan={columns.length + (permissions.view ? 1 : 0)}
+                    colSpan={columns.length + 1}
                     className="px-4 py-6 text-center text-gray-500"
                   >
                     جاري التحميل...
@@ -275,7 +489,7 @@ export function GoodsReceipt() {
               ) : data?.data?.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={columns.length + (permissions.view ? 1 : 0)}
+                    colSpan={columns.length + 1}
                     className="px-4 py-6 text-center text-gray-500"
                   >
                     لا توجد بيانات للعرض
@@ -296,16 +510,34 @@ export function GoodsReceipt() {
                         </td>
                       );
                     })}
-                    {permissions.view && (
-                      <td className="px-4 py-3 text-sm text-gray-800 whitespace-nowrap">
-                        <button
-                          onClick={() => handleView(row)}
-                          className="px-3 py-1 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 text-sm"
-                        >
-                          عرض
-                        </button>
-                      </td>
-                    )}
+                    <td className="px-4 py-3 text-sm text-gray-800 whitespace-nowrap">
+                      <div className="flex gap-2 justify-start">
+                        {permissions.view && (
+                          <button
+                            onClick={() => handleView(row)}
+                            className="px-3 py-1 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 text-sm"
+                          >
+                            عرض
+                          </button>
+                        )}
+                        {permissions.edit && (
+                          <button
+                            onClick={() => handleOpenEdit(row)}
+                            className="px-3 py-1 bg-sky-600 text-white rounded-lg hover:bg-sky-700 text-sm"
+                          >
+                            تعديل
+                          </button>
+                        )}
+                        {permissions.delete && (
+                          <button
+                            onClick={() => handleDelete(row)}
+                            className="px-3 py-1 bg-rose-600 text-white rounded-lg hover:bg-rose-700 text-sm"
+                          >
+                            حذف
+                          </button>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                 ))
               )}
@@ -342,14 +574,14 @@ export function GoodsReceipt() {
         )}
       </div>
 
-      {/* Add Modal */}
+      {/* Add/Edit Modal */}
       <Modal
         isOpen={isModalOpen}
         onClose={() => {
           setIsModalOpen(false);
           resetForm();
         }}
-        title="تسجيل استلام بضائع"
+        title={editingGRN ? 'تعديل استلام بضائع' : 'تسجيل استلام بضائع'}
         size="lg"
       >
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -361,9 +593,10 @@ export function GoodsReceipt() {
               <select
                 value={formData.poId}
                 onChange={(e) => handlePOChange(e.target.value)}
+                disabled={!!editingGRN}
                 className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-sky-500 ${
                   formErrors.poId ? 'border-red-500' : 'border-gray-300'
-                }`}
+                } ${editingGRN ? 'bg-gray-100 cursor-not-allowed' : ''}`}
               >
                 <option value="">اختر أمر شراء</option>
                 {availablePOs.map((po) => (
@@ -519,10 +752,14 @@ export function GoodsReceipt() {
           <div className="flex gap-3 pt-4">
             <button
               type="submit"
-              disabled={createMutation.isPending}
+              disabled={createMutation.isPending || updateMutation.isPending}
               className="flex-1 px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 disabled:opacity-50"
             >
-              {createMutation.isPending ? 'جاري الحفظ...' : 'حفظ'}
+              {createMutation.isPending || updateMutation.isPending
+                ? 'جاري الحفظ...'
+                : editingGRN
+                  ? 'تحديث'
+                  : 'حفظ'}
             </button>
             <button
               type="button"
@@ -637,6 +874,18 @@ export function GoodsReceipt() {
           </div>
         </Modal>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <ConfirmModal
+        isOpen={isDeleteModalOpen}
+        onClose={() => setIsDeleteModalOpen(false)}
+        onConfirm={confirmDelete}
+        title="تأكيد الحذف"
+        message={`هل أنت متأكد من حذف استلام البضائع "${grnToDelete?.grnNumber}"؟ سيتم إرجاع المبلغ المخصوم إلى العهدة تلقائياً.`}
+        confirmText="حذف"
+        cancelText="إلغاء"
+        danger
+      />
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>

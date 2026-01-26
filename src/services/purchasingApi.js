@@ -224,6 +224,21 @@ export const purchasingApi = {
       filtered = filtered.filter((po) => po.status === params.status);
     }
 
+    // Date filtering
+    if (params.dateFrom) {
+      filtered = filtered.filter((po) => {
+        const poDate = po.createdAt || po.deliveryDate || '';
+        return poDate >= params.dateFrom;
+      });
+    }
+
+    if (params.dateTo) {
+      filtered = filtered.filter((po) => {
+        const poDate = po.createdAt || po.deliveryDate || '';
+        return poDate <= params.dateTo;
+      });
+    }
+
     const page = params.page || 1;
     const limit = params.limit || 10;
     const start = (page - 1) * limit;
@@ -321,6 +336,21 @@ export const purchasingApi = {
 
     if (params.poId) {
       filtered = filtered.filter((grn) => grn.poId === params.poId);
+    }
+
+    // Date filtering
+    if (params.dateFrom) {
+      filtered = filtered.filter((grn) => {
+        const grnDate = grn.receivingDate || grn.createdAt || '';
+        return grnDate >= params.dateFrom;
+      });
+    }
+
+    if (params.dateTo) {
+      filtered = filtered.filter((grn) => {
+        const grnDate = grn.receivingDate || grn.createdAt || '';
+        return grnDate <= params.dateTo;
+      });
     }
 
     const page = params.page || 1;
@@ -452,6 +482,227 @@ export const purchasingApi = {
     }
 
     return newGRN;
+  },
+
+  updateGoodsReceipt: async (id, grnData) => {
+    await delay(800);
+    const grns = getStoredData('goodsReceipts');
+    const pos = getStoredData('purchaseOrders');
+    const custodies = getStoredData('custodies');
+    
+    const grnIndex = grns.findIndex((g) => g.id === id);
+    if (grnIndex === -1) {
+      throw new Error('Goods Receipt not found');
+    }
+    
+    const oldGRN = grns[grnIndex];
+    const oldAmount = parseFloat(oldGRN.totalReceivedAmount) || 0;
+    
+    // Get the purchase order
+    const po = pos.find((p) => p.id === grnData.poId || oldGRN.poId);
+    if (!po) {
+      throw new Error('Purchase Order not found');
+    }
+
+    // Calculate new total amount received
+    const receivedItems = grnData.items || [];
+    let newTotalReceivedAmount = 0;
+    receivedItems.forEach((grnItem) => {
+      const poItem = po.items.find((item) => item.id === grnItem.itemId);
+      if (poItem) {
+        newTotalReceivedAmount += (grnItem.receivedQuantity || 0) * (poItem.price || 0);
+      }
+    });
+
+    // Calculate difference
+    const amountDifference = newTotalReceivedAmount - oldAmount;
+
+    // Update custody if linked
+    let custodyDeduction = null;
+    if (po.custodyId && oldGRN.custodyDeduction) {
+      const custodyIndex = custodies.findIndex((c) => c.id === po.custodyId);
+      if (custodyIndex !== -1) {
+        const custody = custodies[custodyIndex];
+        const currentSpent = parseFloat(custody.spentAmount) || 0;
+        const currentRemaining = parseFloat(custody.remainingAmount) || 0;
+        
+        // If amount decreased, return the difference to custody
+        if (amountDifference < 0) {
+          const returnAmount = Math.abs(amountDifference);
+          const newSpent = currentSpent - returnAmount;
+          const newRemaining = currentRemaining + returnAmount;
+          
+          custodies[custodyIndex].spentAmount = Math.max(0, newSpent);
+          custodies[custodyIndex].remainingAmount = newRemaining;
+          custodies[custodyIndex].updatedAt = new Date().toISOString();
+        } else if (amountDifference > 0) {
+          // If amount increased, deduct the difference
+          if (amountDifference > currentRemaining) {
+            throw new Error(`المبلغ الإضافي (${amountDifference.toFixed(2)}) أكبر من المتبقي في العهدة (${currentRemaining.toFixed(2)})`);
+          }
+          
+          const newSpent = currentSpent + amountDifference;
+          const newRemaining = currentRemaining - amountDifference;
+          
+          custodies[custodyIndex].spentAmount = newSpent;
+          custodies[custodyIndex].remainingAmount = newRemaining;
+          custodies[custodyIndex].updatedAt = new Date().toISOString();
+        }
+        
+        saveData('custodies', custodies);
+
+        const finalSpent = parseFloat(custodies[custodyIndex].spentAmount) || 0;
+        const finalRemaining = parseFloat(custodies[custodyIndex].remainingAmount) || 0;
+        
+        custodyDeduction = {
+          custodyId: custody.id,
+          custodyNumber: custody.custodyNumber,
+          employeeName: custody.employeeName,
+          amountDeducted: newTotalReceivedAmount,
+          remainingAfterDeduction: finalRemaining,
+        };
+      }
+    }
+
+    // Update GRN
+    grns[grnIndex] = {
+      ...oldGRN,
+      ...grnData,
+      poNumber: po.poNumber,
+      supplierName: po.supplierName,
+      totalReceivedAmount: newTotalReceivedAmount,
+      custodyDeduction,
+      receivingDate: grnData.receivingDate || oldGRN.receivingDate,
+      items: receivedItems.map((item) => {
+        const poItem = po.items.find((pi) => pi.id === item.itemId);
+        return {
+          ...item,
+          price: poItem?.price || 0,
+          totalAmount: (item.receivedQuantity || 0) * (poItem?.price || 0),
+        };
+      }),
+      updatedAt: new Date().toISOString(),
+    };
+    saveData('goodsReceipts', grns);
+
+    // Update PO received quantities and status
+    const poIndex = pos.findIndex((p) => p.id === po.id);
+    if (poIndex !== -1) {
+      // Recalculate received quantities from all GRNs for this PO
+      const allGRNs = grns.filter((g) => g.poId === po.id);
+      const receivedByItem = {};
+      
+      allGRNs.forEach((grn) => {
+        grn.items?.forEach((item) => {
+          if (!receivedByItem[item.itemId]) {
+            receivedByItem[item.itemId] = 0;
+          }
+          receivedByItem[item.itemId] += item.receivedQuantity || 0;
+        });
+      });
+
+      pos[poIndex].items = pos[poIndex].items.map((item) => ({
+        ...item,
+        receivedQuantity: receivedByItem[item.id] || 0,
+      }));
+
+      const allItemsReceived = pos[poIndex].items.every(
+        (item) => (item.receivedQuantity || 0) >= item.quantity
+      );
+      
+      if (allItemsReceived) {
+        pos[poIndex].status = 'Completed';
+      } else if (pos[poIndex].items.some((item) => (item.receivedQuantity || 0) > 0)) {
+        pos[poIndex].status = 'Partially Received';
+      } else {
+        pos[poIndex].status = 'Open';
+      }
+      
+      pos[poIndex].updatedAt = new Date().toISOString();
+      saveData('purchaseOrders', pos);
+    }
+
+    return grns[grnIndex];
+  },
+
+  deleteGoodsReceipt: async (id) => {
+    await delay(500);
+    const grns = getStoredData('goodsReceipts');
+    const pos = getStoredData('purchaseOrders');
+    const custodies = getStoredData('custodies');
+    
+    const grnIndex = grns.findIndex((g) => g.id === id);
+    if (grnIndex === -1) {
+      throw new Error('Goods Receipt not found');
+    }
+    
+    const grn = grns[grnIndex];
+    const deductedAmount = parseFloat(grn.totalReceivedAmount) || 0;
+    
+    // Return amount to custody if linked
+    if (grn.custodyDeduction && grn.custodyDeduction.custodyId) {
+      const custodyIndex = custodies.findIndex((c) => c.id === grn.custodyDeduction.custodyId);
+      if (custodyIndex !== -1) {
+        const custody = custodies[custodyIndex];
+        const currentSpent = parseFloat(custody.spentAmount) || 0;
+        const currentRemaining = parseFloat(custody.remainingAmount) || 0;
+        
+        // Return the deducted amount
+        const newSpent = Math.max(0, currentSpent - deductedAmount);
+        const newRemaining = currentRemaining + deductedAmount;
+        
+        custodies[custodyIndex].spentAmount = newSpent;
+        custodies[custodyIndex].remainingAmount = newRemaining;
+        custodies[custodyIndex].updatedAt = new Date().toISOString();
+        
+        saveData('custodies', custodies);
+      }
+    }
+
+    // Update PO received quantities
+    if (grn.poId) {
+      const poIndex = pos.findIndex((p) => p.id === grn.poId);
+      if (poIndex !== -1) {
+        // Recalculate received quantities from remaining GRNs
+        const remainingGRNs = grns.filter((g) => g.id !== id && g.poId === grn.poId);
+        const receivedByItem = {};
+        
+        remainingGRNs.forEach((remainingGRN) => {
+          remainingGRN.items?.forEach((item) => {
+            if (!receivedByItem[item.itemId]) {
+              receivedByItem[item.itemId] = 0;
+            }
+            receivedByItem[item.itemId] += item.receivedQuantity || 0;
+          });
+        });
+
+        pos[poIndex].items = pos[poIndex].items.map((item) => ({
+          ...item,
+          receivedQuantity: receivedByItem[item.id] || 0,
+        }));
+
+        const allItemsReceived = pos[poIndex].items.every(
+          (item) => (item.receivedQuantity || 0) >= item.quantity
+        );
+        
+        if (allItemsReceived) {
+          pos[poIndex].status = 'Completed';
+        } else if (pos[poIndex].items.some((item) => (item.receivedQuantity || 0) > 0)) {
+          pos[poIndex].status = 'Partially Received';
+        } else {
+          pos[poIndex].status = 'Open';
+        }
+        
+        pos[poIndex].updatedAt = new Date().toISOString();
+        saveData('purchaseOrders', pos);
+      }
+    }
+
+    // Delete GRN
+    grns.splice(grnIndex, 1);
+    saveData('goodsReceipts', grns);
+    
+    return { success: true };
   },
 
   // ========== Invoices ==========
@@ -898,6 +1149,25 @@ export const purchasingApi = {
     custodies[index].closedAt = new Date().toISOString();
     saveData('custodies', custodies);
     return custodies[index];
+  },
+
+  deleteCustody: async (id) => {
+    await delay(500);
+    const custodies = getStoredData('custodies');
+    const purchaseOrders = getStoredData('purchaseOrders');
+    
+    // Check if custody is linked to any purchase orders
+    const linkedPOs = purchaseOrders.filter((po) => po.custodyId === id);
+    if (linkedPOs.length > 0) {
+      throw new Error('لا يمكن حذف العهدة لأنها مرتبطة بأوامر شراء');
+    }
+    
+    const filtered = custodies.filter((c) => c.id !== id);
+    if (filtered.length === custodies.length) {
+      throw new Error('Custody not found');
+    }
+    saveData('custodies', filtered);
+    return { success: true };
   },
 
   // ========== Custody Clearance ==========

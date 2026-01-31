@@ -133,28 +133,50 @@ export function Payslips() {
 
   const findDueInstallments = (employeeId, periodStart, periodEnd) => {
     const dueInstallments = [];
+    const periodStartStr = (periodStart || "").slice(0, 10);
+    const periodEndStr = (periodEnd || "").slice(0, 10);
 
     loansData.forEach((loan) => {
-      if (
-        loan.employeeId === employeeId &&
-        loan.schedule &&
-        loan.schedule.length > 0
-      ) {
-        loan.schedule.forEach((installment, idx) => {
-          const dueDate = new Date(installment.dueDate);
-          const start = new Date(periodStart);
-          const end = new Date(periodEnd);
+      if (loan.employeeId !== employeeId) return;
 
-          if (dueDate >= start && dueDate <= end && !installment.paid) {
+      const schedule = loan.schedule || [];
+      const hasUnpaidSchedule = schedule.some((s) => !s.paid);
+
+      if (schedule.length > 0 && hasUnpaidSchedule) {
+        schedule.forEach((installment, idx) => {
+          if (installment.paid) return;
+          const dueDateStr = (installment.dueDate || "").slice(0, 10);
+          if (
+            dueDateStr &&
+            dueDateStr >= periodStartStr &&
+            dueDateStr <= periodEndStr
+          ) {
             dueInstallments.push({
               type: `سلفة - ${loan.loanId}`,
-              amount: installment.amount,
+              amount: parseFloat(installment.amount || 0),
               source: "erp_loans",
               loanId: loan.loanId,
               scheduleIndex: idx,
             });
           }
         });
+      } else if (
+        loan.repaymentType === "أقساط شهرية" &&
+        (loan.installmentAmount || loan.installmentAmount === 0) &&
+        parseFloat(loan.remainingAmount || 0) > 0
+      ) {
+        const installmentAmount = parseFloat(loan.installmentAmount || 0);
+        const remainingAmount = parseFloat(loan.remainingAmount || 0);
+        if (installmentAmount > 0) {
+          dueInstallments.push({
+            type: `سلفة - ${loan.loanId}`,
+            amount: Math.min(installmentAmount, remainingAmount),
+            source: "erp_loans",
+            loanId: loan.loanId,
+            scheduleIndex: undefined,
+            noSchedule: true,
+          });
+        }
       }
     });
 
@@ -283,11 +305,14 @@ export function Payslips() {
   };
 
   const calculateOvertimeRate = (basicSalary, allowances, periodStart, periodEnd) => {
-    // سعر الساعة الإضافية = (الراتب الأساسي + الحافز) ÷ عدد أيام الشهر الفعلي ÷ 8 ساعات
+    // سعر الساعة الإضافية = (الراتب الأساسي + الحافز) ÷ عدد أيام الشهر الفعلية (حسب كل شهر) ÷ 8 ساعات
     const totalMonthly =
       parseFloat(basicSalary || 0) + parseFloat(allowances || 0);
-    const daysInPeriod = getDaysInPeriod(periodStart, periodEnd);
-    return totalMonthly / daysInPeriod / 8;
+    const startDate = new Date(periodStart || new Date());
+    const year = startDate.getFullYear();
+    const month = startDate.getMonth() + 1;
+    const daysInMonth = getDaysInMonth(year, month);
+    return totalMonthly / daysInMonth / 8;
   };
 
   const isFriday = (dateString) => {
@@ -672,90 +697,61 @@ export function Payslips() {
       netPay: parseFloat(formData.netPay) || 0,
     };
 
-    if (editingItem) {
-      // Rollback previous loan deductions
-      if (editingItem.deductions) {
-        editingItem.deductions.forEach((ded) => {
-          if (ded.source === "erp_loans" && ded.loanId) {
-            const loan = loansData.find((l) => l.loanId === ded.loanId);
-            if (loan && loan.schedule && ded.scheduleIndex !== undefined) {
-              const schedule = [...loan.schedule];
-              if (schedule[ded.scheduleIndex]) {
-                schedule[ded.scheduleIndex].paid = false;
-                const newRemaining = loan.remainingAmount + ded.amount;
-                updateLoan(
-                  loan.loanId,
-                  {
-                    schedule: schedule,
-                    remainingAmount: newRemaining,
-                  },
-                  "loanId"
-                );
-              }
-            }
-          }
-        });
-      }
+    const applyLoanDeduction = (ded) => {
+      if (ded.source !== "erp_loans" || !ded.loanId) return;
+      const loan = loansData.find((l) => l.loanId === ded.loanId);
+      if (!loan) return;
+      const amount = parseFloat(ded.amount || 0);
 
-      // Apply new deductions
-      payslip.deductions.forEach((ded) => {
-        if (ded.source === "erp_loans" && ded.loanId) {
-          const loan = loansData.find((l) => l.loanId === ded.loanId);
-          if (loan && loan.schedule && ded.scheduleIndex !== undefined) {
-            const schedule = [...loan.schedule];
-            if (
-              schedule[ded.scheduleIndex] &&
-              !schedule[ded.scheduleIndex].paid
-            ) {
-              schedule[ded.scheduleIndex].paid = true;
-              const newRemaining = Math.max(
-                0,
-                loan.remainingAmount - ded.amount
-              );
-              updateLoan(
-                loan.loanId,
-                {
-                  schedule: schedule,
-                  remainingAmount: newRemaining,
-                },
-                "loanId"
-              );
-            }
-          }
+      if (ded.noSchedule) {
+        const newRemaining = Math.max(0, (loan.remainingAmount || 0) - amount);
+        updateLoan(loan.loanId, { remainingAmount: newRemaining }, "loanId");
+      } else if (loan.schedule && ded.scheduleIndex !== undefined) {
+        const schedule = [...loan.schedule];
+        if (schedule[ded.scheduleIndex] && !schedule[ded.scheduleIndex].paid) {
+          schedule[ded.scheduleIndex].paid = true;
+          const newRemaining = Math.max(0, (loan.remainingAmount || 0) - amount);
+          updateLoan(
+            loan.loanId,
+            { schedule, remainingAmount: newRemaining },
+            "loanId"
+          );
         }
-      });
+      }
+    };
 
+    const rollbackLoanDeduction = (ded) => {
+      if (ded.source !== "erp_loans" || !ded.loanId) return;
+      const loan = loansData.find((l) => l.loanId === ded.loanId);
+      if (!loan) return;
+      const amount = parseFloat(ded.amount || 0);
+
+      if (ded.noSchedule) {
+        const newRemaining = (loan.remainingAmount || 0) + amount;
+        updateLoan(loan.loanId, { remainingAmount: newRemaining }, "loanId");
+      } else if (loan.schedule && ded.scheduleIndex !== undefined) {
+        const schedule = [...loan.schedule];
+        if (schedule[ded.scheduleIndex]) {
+          schedule[ded.scheduleIndex].paid = false;
+          const newRemaining = (loan.remainingAmount || 0) + amount;
+          updateLoan(
+            loan.loanId,
+            { schedule, remainingAmount: newRemaining },
+            "loanId"
+          );
+        }
+      }
+    };
+
+    if (editingItem) {
+      if (editingItem.deductions) {
+        editingItem.deductions.forEach(rollbackLoanDeduction);
+      }
+      payslip.deductions.forEach(applyLoanDeduction);
       updateItem(editingItem.payslipId, payslip, "payslipId");
       showToast("تم تحديث كشف الراتب بنجاح");
     } else {
-      // Apply loan deductions
-      payslip.deductions.forEach((ded) => {
-        if (ded.source === "erp_loans" && ded.loanId) {
-          const loan = loansData.find((l) => l.loanId === ded.loanId);
-          if (loan && loan.schedule && ded.scheduleIndex !== undefined) {
-            const schedule = [...loan.schedule];
-            if (
-              schedule[ded.scheduleIndex] &&
-              !schedule[ded.scheduleIndex].paid
-            ) {
-              schedule[ded.scheduleIndex].paid = true;
-              const newRemaining = Math.max(
-                0,
-                loan.remainingAmount - ded.amount
-              );
-              updateLoan(
-                loan.loanId,
-                {
-                  schedule: schedule,
-                  remainingAmount: newRemaining,
-                },
-                "loanId"
-              );
-            }
-          }
-        }
-      });
-
+      payslip.deductions.forEach(applyLoanDeduction);
       addItem(payslip);
       showToast("تم إنشاء كشف الراتب بنجاح");
     }
@@ -796,35 +792,34 @@ export function Payslips() {
     setIsDeleteModalOpen(true);
   };
 
+  const rollbackLoanDeduction = (ded) => {
+    if (ded.source !== "erp_loans" || !ded.loanId) return;
+    const loan = loansData.find((l) => l.loanId === ded.loanId);
+    if (!loan) return;
+    const amount = parseFloat(ded.amount || 0);
+
+    if (ded.noSchedule) {
+      const newRemaining = (loan.remainingAmount || 0) + amount;
+      updateLoan(loan.loanId, { remainingAmount: newRemaining }, "loanId");
+    } else if (loan.schedule && ded.scheduleIndex !== undefined) {
+      const schedule = [...loan.schedule];
+      if (schedule[ded.scheduleIndex]) {
+        schedule[ded.scheduleIndex].paid = false;
+        const newRemaining = (loan.remainingAmount || 0) + amount;
+        updateLoan(
+          loan.loanId,
+          { schedule, remainingAmount: newRemaining },
+          "loanId"
+        );
+      }
+    }
+  };
+
   const confirmDelete = () => {
     if (itemToDelete) {
-      // Rollback loan deductions
       if (itemToDelete.deductions) {
-        itemToDelete.deductions.forEach((ded) => {
-          if (ded.source === "erp_loans" && ded.loanId) {
-            const loan = loansData.find((l) => l.loanId === ded.loanId);
-            if (loan && loan.schedule && ded.scheduleIndex !== undefined) {
-              const schedule = [...loan.schedule];
-              if (
-                schedule[ded.scheduleIndex] &&
-                schedule[ded.scheduleIndex].paid
-              ) {
-                schedule[ded.scheduleIndex].paid = false;
-                const newRemaining = loan.remainingAmount + ded.amount;
-                updateLoan(
-                  loan.loanId,
-                  {
-                    schedule: schedule,
-                    remainingAmount: newRemaining,
-                  },
-                  "loanId"
-                );
-              }
-            }
-          }
-        });
+        itemToDelete.deductions.forEach(rollbackLoanDeduction);
       }
-
       deleteItem(itemToDelete.payslipId, "payslipId");
       showToast("تم حذف كشف الراتب بنجاح");
       setItemToDelete(null);
@@ -1208,26 +1203,41 @@ export function Payslips() {
       const overtimePay =
         (parseFloat(item.overtimeHours || 0) || 0) *
         (parseFloat(item.overtimeRate || 0) || 0);
-      const attendanceDays = getAttendanceDays(
+      const fridayAttendanceDays = getFridayAttendanceDays(
         item.employeeId,
         item.periodStart,
         item.periodEnd
       );
+      const daysInPeriod = getDaysInPeriod(item.periodStart, item.periodEnd);
+      const basicSalary = parseFloat(item.basicSalary || 0);
+      const allowances = parseFloat(item.allowances || 0);
+      const dailySalary = (basicSalary + allowances) / daysInPeriod;
+      const fridayBonus = fridayAttendanceDays > 0 ? dailySalary * fridayAttendanceDays : 0;
+      const extraTotal = overtimePay + fridayBonus;
+
+      const absentDays = getAbsentDays(
+        item.employeeId,
+        item.periodStart,
+        item.periodEnd
+      );
+      const absenceDeduction = item.deductions
+        .filter((d) => (d.type || "").includes("غياب") || d.source === "attendance")
+        .reduce((sum, d) => sum + parseFloat(d.amount || 0), 0);
+      const absenceDisplay = absentDays > 0
+        ? `${absentDays} يوم (-${parseFloat(absenceDeduction).toFixed(2)} ج.م)`
+        : absentDays;
+
       return `
         <tr>
           <td>${employee ? employee.name : item.employeeId}</td>
           <td>${item.basicSalary}</td>
           <td>${item.allowances || 0}</td>
-          <td>${overtimePay.toFixed(2)}</td>
+          <td>${extraTotal.toFixed(2)}</td>
           <td>${item.rewards || 0}</td>
           <td>${loanDeductions.toFixed(2)}</td>
           <td>${item.penalties || 0}</td>
           <td>${item.insurance || 0}</td>
-          <td>${getAbsentDays(
-            item.employeeId,
-            item.periodStart,
-            item.periodEnd
-          )}</td>
+          <td>${absenceDisplay}</td>
           <td><strong>${item.netPay}</strong></td>
         </tr>
       `;

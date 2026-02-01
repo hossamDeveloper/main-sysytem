@@ -29,6 +29,9 @@ export function Payslips() {
   const [itemToDelete, setItemToDelete] = useState(null);
   const [toast, setToast] = useState(null);
   const [selectedMonth, setSelectedMonth] = useState("");
+  const [isPrintAllModalOpen, setIsPrintAllModalOpen] = useState(false);
+  const [printAllLocation, setPrintAllLocation] = useState("");
+  const [printAllSelectedIds, setPrintAllSelectedIds] = useState(new Set());
   const [formData, setFormData] = useState({
     payslipId: "",
     employeeId: "",
@@ -106,6 +109,87 @@ export function Payslips() {
       return startMonth === selectedMonth || endMonth === selectedMonth;
     });
   }, [payslipsData, selectedMonth]);
+
+  const employeeIdsWithPayslipInMonth = useMemo(() => {
+    const map = {};
+    filteredPayslips.forEach((p) => {
+      const key = String(p.employeeId ?? "");
+      if (!map[key] || (p.periodStart || "") > (map[key].periodStart || "")) {
+        map[key] = p;
+      }
+    });
+    return new Set(Object.keys(map));
+  }, [filteredPayslips]);
+
+  const openPrintAllModal = () => {
+    if (!selectedMonth) {
+      showToast("يرجى اختيار الشهر أولاً", "error");
+      return;
+    }
+    if (filteredPayslips.length === 0) {
+      showToast("لا توجد كشوف في الشهر المحدد", "error");
+      return;
+    }
+    setPrintAllLocation("");
+    setPrintAllSelectedIds(new Set());
+    setIsPrintAllModalOpen(true);
+  };
+
+  const PRINT_ALL_LOCATION_ALL = "all";
+
+  const printAllEmployeesInLocation = useMemo(() => {
+    if (!printAllLocation) return [];
+    if (printAllLocation === PRINT_ALL_LOCATION_ALL) {
+      return [...employees];
+    }
+    return employees.filter((e) => (e.location || "") === printAllLocation);
+  }, [employees, printAllLocation]);
+
+  useEffect(() => {
+    if (printAllLocation && printAllEmployeesInLocation.length > 0) {
+      setPrintAllSelectedIds(
+        new Set(printAllEmployeesInLocation.map((e) => String(e.employeeId ?? "")))
+      );
+    } else if (printAllLocation) {
+      setPrintAllSelectedIds(new Set());
+    }
+  }, [printAllLocation, printAllEmployeesInLocation]);
+
+  const togglePrintAllEmployee = (employeeId) => {
+    const id = String(employeeId ?? "");
+    setPrintAllSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAllPrintAll = () => {
+    setPrintAllSelectedIds(
+      new Set(printAllEmployeesInLocation.map((e) => String(e.employeeId ?? "")))
+    );
+  };
+
+  const deselectAllPrintAll = () => {
+    setPrintAllSelectedIds(new Set());
+  };
+
+  const handlePrintAllFromModal = () => {
+    if (!printAllLocation) {
+      showToast("يرجى اختيار المكان", "error");
+      return;
+    }
+    if (printAllSelectedIds.size === 0) {
+      showToast("يرجى اختيار موظف واحد على الأقل", "error");
+      return;
+    }
+    handlePrintAllMonthly({
+      location: printAllLocation === PRINT_ALL_LOCATION_ALL ? undefined : printAllLocation,
+      selectedIds: printAllSelectedIds,
+    });
+    setIsPrintAllModalOpen(false);
+  };
 
   const prepareNewPayslip = () => {
     const month = selectedMonth || monthFromDate();
@@ -200,10 +284,12 @@ export function Payslips() {
   const getAbsentDays = (employeeId, periodStart, periodEnd) => {
     const totalDays =
       (new Date(periodEnd) - new Date(periodStart)) / (1000 * 60 * 60 * 24) + 1;
-    const fridays = getFridaysInPeriod(periodStart, periodEnd).length;
-    const presentDays = getAttendanceDays(employeeId, periodStart, periodEnd);
-    const workingDays = Math.max(0, totalDays - fridays);
-    return Math.max(0, workingDays - presentDays);
+    const fridaysCount = getFridaysInPeriod(periodStart, periodEnd).length;
+    const totalAttendanceDays = getAttendanceDays(employeeId, periodStart, periodEnd);
+    const fridayAttendanceDays = getFridayAttendanceDays(employeeId, periodStart, periodEnd);
+    const nonFridayAttendanceDays = totalAttendanceDays - fridayAttendanceDays;
+    const workingDays = Math.max(0, totalDays - fridaysCount);
+    return Math.max(0, workingDays - nonFridayAttendanceDays);
   };
 
   const getOvertimeHours = (employeeId, periodStart, periodEnd) => {
@@ -1010,10 +1096,17 @@ export function Payslips() {
                 ? `<div class="metric"><strong>مكافآت:</strong> ${item.rewards} ج.م</div>`
                 : ""
             }
-            <div class="metric"><strong>الخصومات (غياب):</strong> ${item.deductions
-              .filter((d) => !d.source || d.source !== "erp_loans")
-              .reduce((sum, d) => sum + parseFloat(d.amount || 0), 0)
-              .toFixed(2)} ج.م</div>
+            ${(() => {
+              const absentDays = getAbsentDays(item.employeeId, item.periodStart, item.periodEnd);
+              const basicSalary = parseFloat(item.basicSalary || 0);
+              const fixedAllowance = parseFloat(item.allowances || 0);
+              const daysInPeriod = getDaysInPeriod(item.periodStart, item.periodEnd);
+              const dailySalary = (basicSalary + fixedAllowance) / daysInPeriod;
+              const absenceDeduction = absentDays > 0 ? dailySalary * absentDays : 0;
+              return absentDays > 0
+                ? `<div class="metric"><strong>أيام الغياب:</strong> ${absentDays} يوم (-${absenceDeduction.toFixed(2)} ج.م)</div>`
+                : `<div class="metric"><strong>أيام الغياب:</strong> 0 يوم</div>`;
+            })()}
             ${(() => {
               const basicSalary = parseFloat(item.basicSalary || 0);
               const fixedAllowance = parseFloat(item.allowances || 0);
@@ -1138,7 +1231,8 @@ export function Payslips() {
     printWindow.print();
   };
 
-  const handlePrintAllMonthly = async () => {
+  const handlePrintAllMonthly = async (options = {}) => {
+    const { location: locationFilter, selectedIds: selectedEmployeeIds } = options;
     const list = filteredPayslips;
     if (!list || list.length === 0) {
       showToast("لا توجد كشوف في الشهر المحدد", "error");
@@ -1155,7 +1249,27 @@ export function Payslips() {
       }
     });
 
-    const perEmployeeList = Object.values(perEmployee);
+    let perEmployeeList = Object.values(perEmployee);
+    if (locationFilter) {
+      perEmployeeList = perEmployeeList.filter((item) => {
+        const emp = employees.find((e) => e.employeeId === item.employeeId);
+        return emp && (emp.location || "") === locationFilter;
+      });
+    }
+    if (selectedEmployeeIds && selectedEmployeeIds.size > 0) {
+      perEmployeeList = perEmployeeList.filter((item) =>
+        selectedEmployeeIds.has(String(item.employeeId ?? ""))
+      );
+    }
+    if (perEmployeeList.length === 0) {
+      showToast(
+        locationFilter
+          ? "لا توجد كشوف للموظفين المحددين في هذا المكان"
+          : "لا توجد كشوف في الشهر المحدد",
+        "error"
+      );
+      return;
+    }
     const totalNet = perEmployeeList.reduce(
       (sum, item) => sum + (parseFloat(item.netPay) || 0),
       0
@@ -1220,12 +1334,10 @@ export function Payslips() {
         item.periodStart,
         item.periodEnd
       );
-      const absenceDeduction = item.deductions
-        .filter((d) => (d.type || "").includes("غياب") || d.source === "attendance")
-        .reduce((sum, d) => sum + parseFloat(d.amount || 0), 0);
-      const absenceDisplay = absentDays > 0
-        ? `${absentDays} يوم (-${parseFloat(absenceDeduction).toFixed(2)} ج.م)`
-        : absentDays;
+      const absenceDeductionAmount = absentDays > 0
+        ? dailySalary * absentDays
+        : 0;
+      const absenceDisplay = `${absentDays} يوم${absenceDeductionAmount > 0 ? ` (-${absenceDeductionAmount.toFixed(2)} ج.م)` : ""}`;
 
       return `
         <tr>
@@ -1420,7 +1532,7 @@ export function Payslips() {
                 تصدير Excel
               </button>
               <button
-                onClick={handlePrintAllMonthly}
+                onClick={openPrintAllModal}
                 className="px-4 py-2 bg-emerald-700 text-white rounded-lg hover:bg-emerald-800 transition-colors"
               >
                 طباعة الكل (الشهر)
@@ -2223,6 +2335,101 @@ export function Payslips() {
         cancelText="إلغاء"
         danger
       />
+
+      <Modal
+        isOpen={isPrintAllModalOpen}
+        onClose={() => setIsPrintAllModalOpen(false)}
+        title="طباعة كشوف الرواتب حسب المكان"
+        size="lg"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            الشهر المحدد: <strong>{selectedMonth || "—"}</strong>
+          </p>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              اختر المكان
+            </label>
+            <select
+              value={printAllLocation}
+              onChange={(e) => setPrintAllLocation(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+            >
+              <option value="">-- اختر المكان --</option>
+              <option value={PRINT_ALL_LOCATION_ALL}>جميع الأماكن</option>
+              <option value="المكتب">المكتب</option>
+              <option value="المصنع">المصنع</option>
+              <option value="الموقع">الموقع</option>
+            </select>
+          </div>
+          {printAllLocation && (
+            <>
+              <div className="flex justify-between items-center">
+                <label className="block text-sm font-medium text-gray-700">
+                  اختر الموظفين للطباعة
+                </label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={selectAllPrintAll}
+                    className="px-3 py-1 text-sm bg-sky-100 text-sky-700 rounded hover:bg-sky-200"
+                  >
+                    تحديد الكل
+                  </button>
+                  <button
+                    type="button"
+                    onClick={deselectAllPrintAll}
+                    className="px-3 py-1 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
+                  >
+                    إلغاء التحديد
+                  </button>
+                </div>
+              </div>
+              <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-lg p-3 space-y-2">
+                {printAllEmployeesInLocation.length === 0 ? (
+                  <p className="text-gray-500 text-sm">
+                    لا يوجد موظفون في هذا المكان
+                  </p>
+                ) : (
+                  printAllEmployeesInLocation.map((emp) => (
+                    <label
+                      key={emp.employeeId}
+                      className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={printAllSelectedIds.has(String(emp.employeeId ?? ""))}
+                        onChange={() => togglePrintAllEmployee(emp.employeeId)}
+                        className="w-4 h-4 text-sky-600 rounded focus:ring-sky-500"
+                      />
+                      <span className="text-sm text-gray-800">
+                        {emp.name} ({emp.employeeId})
+                      </span>
+                    </label>
+                  ))
+                )}
+              </div>
+            </>
+          )}
+          <div className="flex gap-3 justify-end pt-4 border-t">
+            <button
+              type="button"
+              onClick={() => setIsPrintAllModalOpen(false)}
+              className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300"
+            >
+              إلغاء
+            </button>
+            <button
+              type="button"
+              onClick={handlePrintAllFromModal}
+              disabled={!printAllLocation || printAllSelectedIds.size === 0}
+              className="px-4 py-2 bg-emerald-700 text-white rounded-lg hover:bg-emerald-800 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              طباعة
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       <ImportModal
         isOpen={isImportModalOpen}

@@ -26,6 +26,7 @@ export function Employees() {
     fixedAllowance: '',
     payMethod: 'نقدي',
     bankAccount: '',
+    location: '',
   });
 
   const showToast = (message, type = 'success') => {
@@ -44,6 +45,7 @@ export function Employees() {
       fixedAllowance: '',
       payMethod: 'نقدي',
       bankAccount: '',
+      location: '',
     });
     setEditingItem(null);
   };
@@ -112,6 +114,7 @@ export function Employees() {
         fixedAllowance: item.fixedAllowance || item['حافز ثابت'] || '',
         payMethod: item.payMethod || item['طريقة الدفع'] || 'نقدي',
         bankAccount: item.bankAccount || item['حساب بنكي (اختياري)'] || '',
+        location: item.location || item['مكان العمل'] || '',
       }));
 
       if (mode === 'replace') {
@@ -142,6 +145,7 @@ export function Employees() {
     { key: 'hireDate', label: 'تاريخ التعيين' },
     { key: 'salary', label: 'المرتب', render: (val) => val ? `${val} ج.م` : '-' },
     { key: 'payMethod', label: 'طريقة الدفع' },
+    { key: 'location', label: 'مكان العمل', render: (val) => val || '-' },
   ];
 
   return (
@@ -298,6 +302,19 @@ export function Employees() {
                 onChange={(e) => setFormData({ ...formData, bankAccount: e.target.value })}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
               />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">مكان العمل</label>
+              <select
+                value={formData.location}
+                onChange={(e) => setFormData({ ...formData, location: e.target.value })}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+              >
+                <option value="">-- اختر المكان --</option>
+                <option value="المكتب">المكتب</option>
+                <option value="المصنع">المصنع</option>
+                <option value="الموقع">الموقع</option>
+              </select>
             </div>
           </div>
           <div className="flex gap-3 justify-end pt-4">

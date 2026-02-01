@@ -1289,6 +1289,12 @@ export function Payslips() {
         );
         const daysInPeriod = getDaysInPeriod(item.periodStart, item.periodEnd);
         const fridayBonus = ((basic + allow) / daysInPeriod) * fridayDays;
+        const hourlyRate = (basic + allow) / daysInPeriod / 8;
+        const lateHrs = parseFloat(item.lateHours || 0);
+        const earlyLeaveHrs = parseFloat(item.earlyLeaveHours || 0);
+        const lateDeduction = lateHrs * hourlyRate;
+        const earlyLeaveDeduction = earlyLeaveHrs * hourlyRate;
+        const extraNet = overtimePay + fridayBonus - lateDeduction - earlyLeaveDeduction;
         const loanDeductions = item.deductions
           .filter((d) => d.source === "erp_loans")
           .reduce((sum, d) => sum + parseFloat(d.amount || 0), 0);
@@ -1300,7 +1306,7 @@ export function Payslips() {
 
         acc.totalLoans += loanDeductions;
         acc.totalBaseAllow += basic + allow;
-        acc.totalRewards += rewards + fridayBonus + overtimePay;
+        acc.totalRewards += rewards + extraNet;
         acc.totalDeductions += absenceDeductions + penalties + insurance;
         return acc;
       },
@@ -1326,8 +1332,13 @@ export function Payslips() {
       const basicSalary = parseFloat(item.basicSalary || 0);
       const allowances = parseFloat(item.allowances || 0);
       const dailySalary = (basicSalary + allowances) / daysInPeriod;
+      const hourlyRate = (basicSalary + allowances) / daysInPeriod / 8;
       const fridayBonus = fridayAttendanceDays > 0 ? dailySalary * fridayAttendanceDays : 0;
-      const extraTotal = overtimePay + fridayBonus;
+      const lateHrs = parseFloat(item.lateHours || 0);
+      const earlyLeaveHrs = parseFloat(item.earlyLeaveHours || 0);
+      const lateDeduction = lateHrs * hourlyRate;
+      const earlyLeaveDeduction = earlyLeaveHrs * hourlyRate;
+      const extraTotal = overtimePay + fridayBonus - lateDeduction - earlyLeaveDeduction;
 
       const absentDays = getAbsentDays(
         item.employeeId,

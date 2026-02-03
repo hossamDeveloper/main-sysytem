@@ -10,6 +10,8 @@ import { Modal } from '../../components/Modal';
 import { ConfirmModal } from '../../components/ConfirmModal';
 import { Toast } from '../../components/Toast';
 import { useModulePermissions } from '../../hooks/usePermissions';
+import { exportToExcel, importFromExcel } from '../../utils/excelUtils';
+import { purchasingApi } from '../../services/purchasingApi';
 
 export function Products() {
   const permissions = useModulePermissions('purchasing');
@@ -120,6 +122,132 @@ export function Products() {
     setIsSuppliersModalOpen(true);
   };
 
+  const handleExport = async () => {
+    try {
+      const res = await purchasingApi.getProducts({ page: 1, limit: 100000 });
+      const allProducts = res?.data || [];
+      if (!allProducts.length) {
+        showToast('لا توجد بيانات للتصدير', 'error');
+        return;
+      }
+
+      const supplierProductsRaw = localStorage.getItem('purchasing_supplierProducts');
+      const suppliersRaw = localStorage.getItem('purchasing_suppliers');
+      const supplierProducts = supplierProductsRaw ? JSON.parse(supplierProductsRaw) : [];
+      const suppliers = suppliersRaw ? JSON.parse(suppliersRaw) : [];
+
+      const rows = [];
+      allProducts.forEach((p) => {
+        const spList = supplierProducts.filter((sp) => sp.productId === p.id);
+        if (!spList.length) {
+          rows.push({
+            productId: p.id,
+            productName: p.name,
+            productCategory: p.category,
+            supplierId: '',
+            supplierName: '',
+            supplierPrice: '',
+          });
+        } else {
+          spList.forEach((sp) => {
+            const supplier = suppliers.find((s) => s.id === sp.supplierId);
+            rows.push({
+              productId: p.id,
+              productName: p.name,
+              productCategory: p.category,
+              supplierId: sp.supplierId,
+              supplierName: supplier?.name || '',
+              supplierPrice: sp.price,
+            });
+          });
+        }
+      });
+
+      exportToExcel(rows, 'products', 'erp_export_products_with_suppliers.xlsx');
+      showToast('تم تصدير المنتجات مع الموردين إلى Excel بنجاح');
+    } catch (error) {
+      console.error(error);
+      showToast('حدث خطأ أثناء التصدير', 'error');
+    }
+  };
+
+  const handleImport = (importedRows) => {
+    if (!Array.isArray(importedRows) || !importedRows.length) {
+      showToast('ملف الاستيراد فارغ أو غير صحيح', 'error');
+      return;
+    }
+
+    // مسح كل البيانات القديمة
+    localStorage.removeItem('purchasing_products');
+    localStorage.removeItem('purchasing_supplierProducts');
+    localStorage.removeItem('purchasing_suppliers');
+
+    const productsMap = new Map();
+    const suppliersMap = new Map();
+    const supplierProducts = [];
+
+    importedRows.forEach((row, index) => {
+      const productName = row.productName || row['productName'] || row['اسم المنتج'] || row['name'] || '';
+      if (!productName) return;
+
+      const productCategory =
+        row.productCategory || row['productCategory'] || row['الفئة'] || row['category'] || '';
+      const productKey = `${productName.trim()}__${productCategory.trim()}`;
+
+      if (!productsMap.has(productKey)) {
+        productsMap.set(productKey, {
+          id: `PROD-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+          name: productName,
+          category: productCategory,
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      const supplierName =
+        row.supplierName || row['supplierName'] || row['اسم المورد'] || row['supplier'] || '';
+      const supplierPrice =
+        row.supplierPrice || row['supplierPrice'] || row['سعر المورد'] || row['السعر'] || '';
+
+      if (supplierName) {
+        const supplierKey = supplierName.trim();
+        if (!suppliersMap.has(supplierKey)) {
+          suppliersMap.set(supplierKey, {
+            id: `SUP-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+            name: supplierName,
+            contactPerson: '',
+            phone: '',
+            email: '',
+            address: '',
+            status: 'Active',
+            createdAt: new Date().toISOString(),
+          });
+        }
+
+        const product = productsMap.get(productKey);
+        const supplier = suppliersMap.get(supplierKey);
+        supplierProducts.push({
+          id: `SUPPROD-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+          supplierId: supplier.id,
+          productId: product.id,
+          price: parseFloat(supplierPrice) || 0,
+          createdAt: new Date().toISOString(),
+        });
+      }
+    });
+
+    const productsArr = Array.from(productsMap.values());
+    const suppliersArr = Array.from(suppliersMap.values());
+
+    localStorage.setItem('purchasing_products', JSON.stringify(productsArr));
+    localStorage.setItem('purchasing_suppliers', JSON.stringify(suppliersArr));
+    localStorage.setItem('purchasing_supplierProducts', JSON.stringify(supplierProducts));
+
+    showToast(
+      'تم استبدال بيانات المنتجات والموردين والربط بينهم بالكامل من ملف Excel بنجاح',
+      'success'
+    );
+  };
+
   if (!permissions.view) {
     return (
       <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-3 rounded-lg">
@@ -140,14 +268,27 @@ export function Products() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-3xl font-bold text-gray-800">المنتجات</h2>
-        {permissions.create && (
-          <button
-            onClick={handleOpenAdd}
-            className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
-          >
-            + إضافة منتج جديد
-          </button>
-        )}
+        <div className="flex gap-3">
+          {permissions.view && (
+            <button
+              onClick={handleExport}
+              className="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors"
+            >
+              تصدير Excel
+            </button>
+          )}
+          {permissions.create && (
+            <>
+              <ImportProductsButton onImport={handleImport} />
+              <button
+                onClick={handleOpenAdd}
+                className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
+              >
+                + إضافة منتج جديد
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Filters */}
@@ -472,5 +613,78 @@ export function Products() {
         />
       )}
     </div>
+  );
+}
+
+function ImportProductsButton({ onImport }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [file, setFile] = useState(null);
+
+  const handleFileChange = (e) => {
+    setFile(e.target.files[0]);
+  };
+
+  const handleDoImport = () => {
+    if (!file) return;
+    importFromExcel(
+      file,
+      (rows) => {
+        onImport?.(rows);
+        setIsOpen(false);
+        setFile(null);
+      },
+      (error) => {
+        console.error('Import error:', error);
+      }
+    );
+  };
+
+  return (
+    <>
+      <button
+        onClick={() => setIsOpen(true)}
+        className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
+      >
+        استيراد Excel
+      </button>
+      <Modal
+        isOpen={isOpen}
+        onClose={() => {
+          setIsOpen(false);
+          setFile(null);
+        }}
+        title="استيراد Excel"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <input
+            type="file"
+            accept=".xlsx,.xls"
+            onChange={handleFileChange}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg"
+          />
+          <div className="flex gap-3 justify-end">
+            <button
+              type="button"
+              onClick={() => {
+                setIsOpen(false);
+                setFile(null);
+              }}
+              className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300"
+            >
+              إلغاء
+            </button>
+            <button
+              type="button"
+              onClick={handleDoImport}
+              disabled={!file}
+              className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 disabled:opacity-50"
+            >
+              استيراد
+            </button>
+          </div>
+        </div>
+      </Modal>
+    </>
   );
 }

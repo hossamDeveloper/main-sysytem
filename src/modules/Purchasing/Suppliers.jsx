@@ -10,10 +10,12 @@ import {
   useUpdateSupplierProduct,
   useDeleteSupplierProduct,
 } from '../../services/purchasingQueries';
+import { exportToExcel, importFromExcel } from '../../utils/excelUtils';
 import { Modal } from '../../components/Modal';
 import { ConfirmModal } from '../../components/ConfirmModal';
 import { Toast } from '../../components/Toast';
 import { useModulePermissions } from '../../hooks/usePermissions';
+import { purchasingApi } from '../../services/purchasingApi';
 
 export function Suppliers() {
   const permissions = useModulePermissions('purchasing');
@@ -229,6 +231,135 @@ export function Suppliers() {
     }
   };
 
+  const handleExport = async () => {
+    try {
+      const res = await purchasingApi.getSuppliers({ page: 1, limit: 100000 });
+      const allSuppliers = res?.data || [];
+      if (!allSuppliers.length) {
+        showToast('لا توجد بيانات للتصدير', 'error');
+        return;
+      }
+
+      const supplierProductsRaw = localStorage.getItem('purchasing_supplierProducts');
+      const productsRaw = localStorage.getItem('purchasing_products');
+      const supplierProducts = supplierProductsRaw ? JSON.parse(supplierProductsRaw) : [];
+      const products = productsRaw ? JSON.parse(productsRaw) : [];
+
+      const rows = [];
+      allSuppliers.forEach((s) => {
+        const spList = supplierProducts.filter((sp) => sp.supplierId === s.id);
+        if (!spList.length) {
+          rows.push({
+            supplierId: s.id,
+            name: s.name,
+            contactPerson: s.contactPerson,
+            phone: s.phone,
+            email: s.email,
+            address: s.address,
+            status: s.status,
+            productId: '',
+            productName: '',
+            productCategory: '',
+            productPrice: '',
+          });
+        } else {
+          spList.forEach((sp) => {
+            const product = products.find((p) => p.id === sp.productId);
+            rows.push({
+              supplierId: s.id,
+              name: s.name,
+              contactPerson: s.contactPerson,
+              phone: s.phone,
+              email: s.email,
+              address: s.address,
+              status: s.status,
+              productId: sp.productId,
+              productName: product?.name || '',
+              productCategory: product?.category || '',
+              productPrice: sp.price,
+            });
+          });
+        }
+      });
+
+      exportToExcel(rows, 'suppliers', 'erp_export_suppliers_with_products.xlsx');
+      showToast('تم تصدير الموردين مع منتجاتهم إلى Excel بنجاح');
+    } catch (error) {
+      console.error(error);
+      showToast('حدث خطأ أثناء التصدير', 'error');
+    }
+  };
+
+  const handleImport = (importedRows) => {
+    if (!Array.isArray(importedRows) || !importedRows.length) {
+      showToast('ملف الاستيراد فارغ أو غير صحيح', 'error');
+      return;
+    }
+
+    // مسح كل البيانات القديمة من LocalStorage
+    localStorage.removeItem('purchasing_suppliers');
+    localStorage.removeItem('purchasing_supplierProducts');
+    localStorage.removeItem('purchasing_products');
+
+    const suppliersMap = new Map();
+    const productsMap = new Map();
+    const supplierProducts = [];
+
+    importedRows.forEach((row, index) => {
+      const supplierName = row.name || row['name'] || row['اسم المورد'] || '';
+      if (!supplierName) return;
+
+      const supplierKey = supplierName.trim();
+      if (!suppliersMap.has(supplierKey)) {
+        suppliersMap.set(supplierKey, {
+          id: `SUP-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+          name: supplierName,
+          contactPerson: row.contactPerson || row['الشخص المسؤول'] || '',
+          phone: row.phone || row['الهاتف'] || '',
+          email: row.email || row['البريد الإلكتروني'] || '',
+          address: row.address || row['العنوان'] || '',
+          status: row.status || row['الحالة'] || 'Active',
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      const productName = row.productName || row['productName'] || row['اسم المنتج'] || '';
+      const productCategory = row.productCategory || row['productCategory'] || row['الفئة'] || '';
+      const productPrice = row.productPrice || row['productPrice'] || row['سعر المنتج'] || row['السعر'] || '';
+
+      if (productName) {
+        const productKey = `${productName.trim()}__${productCategory.trim()}`;
+        if (!productsMap.has(productKey)) {
+          productsMap.set(productKey, {
+            id: `PROD-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+            name: productName,
+            category: productCategory,
+            createdAt: new Date().toISOString(),
+          });
+        }
+
+        const supplier = suppliersMap.get(supplierKey);
+        const product = productsMap.get(productKey);
+        supplierProducts.push({
+          id: `SUPPROD-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+          supplierId: supplier.id,
+          productId: product.id,
+          price: parseFloat(productPrice) || 0,
+          createdAt: new Date().toISOString(),
+        });
+      }
+    });
+
+    const suppliersArr = Array.from(suppliersMap.values());
+    const productsArr = Array.from(productsMap.values());
+
+    localStorage.setItem('purchasing_suppliers', JSON.stringify(suppliersArr));
+    localStorage.setItem('purchasing_products', JSON.stringify(productsArr));
+    localStorage.setItem('purchasing_supplierProducts', JSON.stringify(supplierProducts));
+
+    showToast('تم استبدال بيانات الموردين ومنتجاتهم من ملف Excel بنجاح (تم مسح القديم بالكامل)', 'success');
+  };
+
   if (!permissions.view) {
     return (
       <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-3 rounded-lg">
@@ -263,14 +394,27 @@ export function Suppliers() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-3xl font-bold text-gray-800">إدارة الموردين</h2>
-        {permissions.create && (
-          <button
-            onClick={handleOpenAdd}
-            className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
-          >
-            + إضافة مورد جديد
-          </button>
-        )}
+        <div className="flex gap-3">
+          {permissions.view && (
+            <button
+              onClick={handleExport}
+              className="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors"
+            >
+              تصدير Excel
+            </button>
+          )}
+          {permissions.create && (
+            <>
+              <ImportSuppliersButton onImport={handleImport} />
+              <button
+                onClick={handleOpenAdd}
+                className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
+              >
+                + إضافة مورد جديد
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Filters */}
@@ -750,6 +894,79 @@ export function Suppliers() {
         />
       )}
     </div>
+  );
+}
+
+function ImportSuppliersButton({ onImport }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [file, setFile] = useState(null);
+
+  const handleFileChange = (e) => {
+    setFile(e.target.files[0]);
+  };
+
+  const handleDoImport = () => {
+    if (!file) return;
+    importFromExcel(
+      file,
+      (rows) => {
+        onImport?.(rows);
+        setIsOpen(false);
+        setFile(null);
+      },
+      (error) => {
+        console.error('Import error:', error);
+      }
+    );
+  };
+
+  return (
+    <>
+      <button
+        onClick={() => setIsOpen(true)}
+        className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
+      >
+        استيراد Excel
+      </button>
+      <Modal
+        isOpen={isOpen}
+        onClose={() => {
+          setIsOpen(false);
+          setFile(null);
+        }}
+        title="استيراد Excel"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <input
+            type="file"
+            accept=".xlsx,.xls"
+            onChange={handleFileChange}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg"
+          />
+          <div className="flex gap-3 justify-end">
+            <button
+              type="button"
+              onClick={() => {
+                setIsOpen(false);
+                setFile(null);
+              }}
+              className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300"
+            >
+              إلغاء
+            </button>
+            <button
+              type="button"
+              onClick={handleDoImport}
+              disabled={!file}
+              className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 disabled:opacity-50"
+            >
+              استيراد
+            </button>
+          </div>
+        </div>
+      </Modal>
+    </>
   );
 }
 

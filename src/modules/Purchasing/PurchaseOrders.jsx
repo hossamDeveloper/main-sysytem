@@ -3,6 +3,7 @@ import {
   usePurchaseOrders,
   useSuppliers,
   useCustodies,
+  useCustody,
   useProducts,
   useSupplierProducts,
   useCreatePurchaseOrder,
@@ -89,6 +90,7 @@ export function PurchaseOrders() {
   const { data: supplierProductsData } = useSupplierProducts(formData.supplierId || null, {
     limit: 1000,
   });
+  const { data: viewingCustody } = useCustody(viewingPO?.custodyId || null);
   const createMutation = useCreatePurchaseOrder();
   const updateMutation = useUpdatePurchaseOrder();
   const deleteMutation = useDeletePurchaseOrder();
@@ -226,6 +228,14 @@ export function PurchaseOrders() {
     });
   };
 
+  const availableProductsForSupplier = useMemo(() => {
+    const products = productsData?.data || [];
+    const sp = supplierProductsData?.data || [];
+    if (!formData.supplierId) return [];
+    const allowed = new Set(sp.map((x) => String(x.productId ?? '')));
+    return products.filter((p) => allowed.has(String(p.id ?? '')));
+  }, [formData.supplierId, productsData?.data, supplierProductsData?.data]);
+
   const handleAddItem = () => {
     if (itemInputMode === 'product') {
       // Add from product
@@ -312,6 +322,118 @@ export function PurchaseOrders() {
   const handleView = (po) => {
     setViewingPO(po);
     setIsViewModalOpen(true);
+  };
+
+  const handlePrintPurchaseOrder = (po) => {
+    if (!po) return;
+    const now = new Date();
+    const dateTime = now.toLocaleString('ar-EG', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    const items = po.items || [];
+    const rowsHtml = items
+      .map((item, idx) => {
+        const qty = parseFloat(item.quantity || 0) || 0;
+        const price = parseFloat(item.price || 0) || 0;
+        const total = qty * price;
+        return `
+          <tr>
+            <td>${idx + 1}</td>
+            <td>${item.itemName || '-'}</td>
+            <td>${qty}</td>
+            <td>${price.toFixed(2)}</td>
+            <td>${total.toFixed(2)}</td>
+          </tr>
+        `;
+      })
+      .join('');
+
+    const totalAmount = items.reduce((sum, item) => {
+      const qty = parseFloat(item.quantity || 0) || 0;
+      const price = parseFloat(item.price || 0) || 0;
+      return sum + qty * price;
+    }, 0);
+
+    const printWindow = window.open('', '_blank');
+    printWindow.document.write(`
+      <html dir="rtl">
+        <head>
+          <title>أمر شراء - ${po.poNumber || ''}</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+            .date-time { font-size: 12px; color: #333; }
+            h1 { margin: 0 0 12px; text-align: center; }
+            .info { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin: 12px 0 18px; }
+            .box { border: 1px solid #000; border-radius: 6px; padding: 10px; background: #f9f9f9; }
+            .label { color: #333; font-weight: 700; }
+            table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+            th, td { border: 1px solid #000; padding: 8px; text-align: right; }
+            th { background: #f2f2f2; }
+            .total { margin-top: 10px; font-weight: 700; text-align: left; }
+            .notes { margin-top: 14px; }
+            .signatures { display: flex; justify-content: space-between; margin-top: 36px; gap: 40px; }
+            .signature { width: 240px; text-align: center; }
+            .line { margin-top: 40px; border-top: 2px solid #000; }
+          </style>
+        </head>
+        <body>
+          <div class="top-bar">
+            <div class="date-time">${dateTime}</div>
+            <div></div>
+          </div>
+          <h1>أمر شراء</h1>
+
+          <div class="info">
+            <div class="box"><span class="label">رقم الأمر:</span> ${po.poNumber || '-'}</div>
+            <div class="box"><span class="label">المورد:</span> ${po.supplierName || '-'}</div>
+            <div class="box"><span class="label">العهدة:</span> ${po.custodyNumber || '-'}</div>
+            <div class="box"><span class="label">الموظف المسؤول:</span> ${
+              po.responsibleEmployeeName || po.employeeName || viewingCustody?.employeeName || '-'
+            }</div>
+            <div class="box"><span class="label">تاريخ التسليم:</span> ${po.deliveryDate || '-'}</div>
+            <div class="box"><span class="label">شروط الدفع:</span> ${po.paymentTerms || '-'}</div>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 50px;">م</th>
+                <th>اسم العنصر</th>
+                <th style="width: 90px;">الكمية</th>
+                <th style="width: 110px;">السعر</th>
+                <th style="width: 120px;">الإجمالي</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml || `<tr><td colspan="5" style="text-align:center;">لا توجد عناصر</td></tr>`}
+            </tbody>
+          </table>
+
+          <div class="total">الإجمالي: ${totalAmount.toFixed(2)} ج.م</div>
+
+          ${po.notes ? `<div class="notes"><span class="label">ملاحظات:</span> ${po.notes}</div>` : ''}
+
+          <div class="signatures">
+            <div class="signature">
+              <strong>توقيع المحاسب</strong>
+              <div class="line"></div>
+            </div>
+            <div class="signature">
+              <strong>توقيع المستلم</strong>
+              <div class="line"></div>
+            </div>
+          </div>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+    printWindow.print();
   };
 
   const handleSubmit = async (e) => {
@@ -812,7 +934,7 @@ export function PurchaseOrders() {
                   disabled={!formData.supplierId}
                 >
                   <option value="">اختر منتج</option>
-                  {(productsData?.data || []).map((product) => (
+                  {(availableProductsForSupplier || []).map((product) => (
                     <option key={product.id} value={product.id}>
                       {product.name} {product.category ? `(${product.category})` : ''}
                     </option>
@@ -821,6 +943,11 @@ export function PurchaseOrders() {
                 {!formData.supplierId && (
                   <div className="text-sm text-yellow-600 bg-yellow-50 p-2 rounded">
                     يرجى اختيار مورد أولاً لعرض أسعار المنتجات
+                  </div>
+                )}
+                {formData.supplierId && (supplierProductsData?.data || []).length === 0 && (
+                  <div className="text-sm text-rose-700 bg-rose-50 p-2 rounded">
+                    هذا المورد لا يوجد لديه منتجات مرتبطة. أضِف منتجات للمورد من صفحة الموردين.
                   </div>
                 )}
                 {formData.supplierId && selectedProductId && (
@@ -993,7 +1120,10 @@ export function PurchaseOrders() {
               <div>
                 <label className="text-sm font-medium text-gray-600">الموظف المسؤول</label>
                 <p className="text-gray-800">
-                  {viewingPO.responsibleEmployeeName || '-'}
+                  {viewingPO.responsibleEmployeeName ||
+                    viewingPO.employeeName ||
+                    viewingCustody?.employeeName ||
+                    '-'}
                 </p>
               </div>
               <div>
@@ -1045,6 +1175,26 @@ export function PurchaseOrders() {
                 <p className="text-gray-800">{viewingPO.notes}</p>
               </div>
             )}
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => handlePrintPurchaseOrder(viewingPO)}
+                className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
+              >
+                طباعة
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsViewModalOpen(false);
+                  setViewingPO(null);
+                }}
+                className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300"
+              >
+                إغلاق
+              </button>
+            </div>
           </div>
         </Modal>
       )}

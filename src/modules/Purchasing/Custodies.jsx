@@ -13,6 +13,8 @@ import { Modal } from '../../components/Modal';
 import { ConfirmModal } from '../../components/ConfirmModal';
 import { Toast } from '../../components/Toast';
 import { useModulePermissions } from '../../hooks/usePermissions';
+import { exportToExcel, importFromExcel } from '../../utils/excelUtils';
+import { purchasingApi } from '../../services/purchasingApi';
 
 export function Custodies() {
   const permissions = useModulePermissions('purchasing');
@@ -30,6 +32,8 @@ export function Custodies() {
   const [custodyToDelete, setCustodyToDelete] = useState(null);
   const [viewingCustodyPurchases, setViewingCustodyPurchases] = useState(null);
   const [toast, setToast] = useState(null);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [importFile, setImportFile] = useState(null);
 
   // Calculate date filters
   const dateFilters = useMemo(() => {
@@ -157,6 +161,155 @@ export function Custodies() {
     } catch (error) {
       showToast(error.message || 'حدث خطأ', 'error');
     }
+  };
+
+  const handleExport = async () => {
+    try {
+      const res = await purchasingApi.getCustodies({ page: 1, limit: 100000 });
+      const allCustodies = res?.data || [];
+      const pos = allPurchaseOrders?.data || [];
+      const grns = allGoodsReceipts?.data || [];
+
+      const rows = [];
+      allCustodies.forEach((c, idx) => {
+        const poList = pos.filter((po) => po.custodyId === c.id);
+        const grnList = grns.filter((grn) => poList.some((po) => po.id === grn.poId));
+
+        if (!poList.length && !grnList.length) {
+          rows.push({
+            custodyId: c.id,
+            custodyNumber: c.custodyNumber,
+            title: c.title,
+            employeeName: c.employeeName,
+            amount: c.amount,
+            spentAmount: c.spentAmount || 0,
+            remainingAmount: c.remainingAmount ?? c.amount - (c.spentAmount || 0),
+            issueDate: c.issueDate,
+            status: c.status,
+            poNumber: '',
+            poStatus: '',
+            poTotalAmount: '',
+            grnNumber: '',
+            grnDate: '',
+            grnAmount: '',
+          });
+        } else {
+          poList.forEach((po) => {
+            const grnForPo = grns.filter((g) => g.poId === po.id);
+            if (!grnForPo.length) {
+              rows.push({
+                custodyId: c.id,
+                custodyNumber: c.custodyNumber,
+                title: c.title,
+                employeeName: c.employeeName,
+                amount: c.amount,
+                spentAmount: c.spentAmount || 0,
+                remainingAmount: c.remainingAmount ?? c.amount - (c.spentAmount || 0),
+                issueDate: c.issueDate,
+                status: c.status,
+                poNumber: po.poNumber,
+                poStatus: po.status,
+                poTotalAmount: po.totalAmount,
+                grnNumber: '',
+                grnDate: '',
+                grnAmount: '',
+              });
+            } else {
+              grnForPo.forEach((grn) => {
+                rows.push({
+                  custodyId: c.id,
+                  custodyNumber: c.custodyNumber,
+                  title: c.title,
+                  employeeName: c.employeeName,
+                  amount: c.amount,
+                  spentAmount: c.spentAmount || 0,
+                  remainingAmount: c.remainingAmount ?? c.amount - (c.spentAmount || 0),
+                  issueDate: c.issueDate,
+                  status: c.status,
+                  poNumber: po.poNumber,
+                  poStatus: po.status,
+                  poTotalAmount: po.totalAmount,
+                  grnNumber: grn.grnNumber,
+                  grnDate: grn.receivingDate,
+                  grnAmount: grn.totalReceivedAmount,
+                });
+              });
+            }
+          });
+        }
+      });
+
+      if (!rows.length) {
+        showToast('لا توجد بيانات للتصدير', 'error');
+        return;
+      }
+
+      exportToExcel(rows, 'custodies', 'erp_export_custodies.xlsx');
+      showToast('تم تصدير بيانات العهد وحركاتها إلى Excel بنجاح');
+    } catch (error) {
+      console.error(error);
+      showToast('حدث خطأ أثناء التصدير', 'error');
+    }
+  };
+
+  const handleImportRows = (rows) => {
+    if (!Array.isArray(rows) || !rows.length) {
+      showToast('ملف الاستيراد فارغ أو غير صحيح', 'error');
+      return;
+    }
+
+    // مسح بيانات العهد فقط
+    localStorage.removeItem('purchasing_custodies');
+
+    const custodiesMap = new Map();
+
+    rows.forEach((row, idx) => {
+      const custodyNumber = row.custodyNumber || row['رقم العهدة'] || row['custodyNumber'] || '';
+      if (!custodyNumber) return;
+      const key = custodyNumber.trim();
+
+      if (!custodiesMap.has(key)) {
+        const amount = parseFloat(row.amount || row['إجمالي المبلغ'] || 0) || 0;
+        const spent = parseFloat(row.spentAmount || row['المصروف'] || 0) || 0;
+        const remaining =
+          parseFloat(row.remainingAmount || row['المتبقي']) || amount - spent;
+        custodiesMap.set(key, {
+          id: `CST-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+          custodyNumber: custodyNumber,
+          title: row.title || row['العنوان'] || '',
+          employeeId: '',
+          employeeName: row.employeeName || row['الموظف'] || '',
+          amount: amount,
+          spentAmount: spent,
+          remainingAmount: remaining,
+          issueDate: row.issueDate || row['تاريخ الصرف'] || '',
+          status: row.status || row['الحالة'] || 'Issued',
+          createdAt: new Date().toISOString(),
+        });
+      }
+    });
+
+    const custodiesArr = Array.from(custodiesMap.values());
+
+    localStorage.setItem('purchasing_custodies', JSON.stringify(custodiesArr));
+
+    showToast('تم استبدال بيانات العهد فقط من ملف Excel (تم مسح العهد القديمة)', 'success');
+  };
+
+  const handleImportFile = () => {
+    if (!importFile) return;
+    importFromExcel(
+      importFile,
+      (rows) => {
+        handleImportRows(rows);
+        setIsImportModalOpen(false);
+        setImportFile(null);
+      },
+      (error) => {
+        console.error(error);
+        showToast('فشل في قراءة ملف Excel', 'error');
+      }
+    );
   };
 
   const handleClose = (custody) => {
@@ -332,14 +485,32 @@ export function Custodies() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-3xl font-bold text-gray-800">صرف العهدة النقدية</h2>
-        {permissions.create && (
-          <button
-            onClick={handleOpenAdd}
-            className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
-          >
-            + صرف عهدة جديدة
-          </button>
-        )}
+        <div className="flex gap-3">
+          {permissions.view && (
+            <button
+              onClick={handleExport}
+              className="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors"
+            >
+              تصدير Excel
+            </button>
+          )}
+          {permissions.create && (
+            <>
+              <button
+                onClick={() => setIsImportModalOpen(true)}
+                className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
+              >
+                استيراد Excel
+              </button>
+              <button
+                onClick={handleOpenAdd}
+                className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
+              >
+                + صرف عهدة جديدة
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Filters */}
@@ -696,6 +867,49 @@ export function Custodies() {
         cancelText="إلغاء"
         danger
       />
+
+      {/* Import Modal */}
+      <Modal
+        isOpen={isImportModalOpen}
+        onClose={() => {
+          setIsImportModalOpen(false);
+          setImportFile(null);
+        }}
+        title="استيراد Excel (سيتم استبدال البيانات)"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <input
+            type="file"
+            accept=".xlsx,.xls"
+            onChange={(e) => setImportFile(e.target.files[0])}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg"
+          />
+          <div className="text-sm text-amber-700 bg-amber-50 p-3 rounded border border-amber-200">
+            ⚠️ سيتم مسح بيانات العهد وأوامر الشراء والاستلامات واستبدالها بما في الملف.
+          </div>
+          <div className="flex gap-3 justify-end">
+            <button
+              type="button"
+              onClick={() => {
+                setIsImportModalOpen(false);
+                setImportFile(null);
+              }}
+              className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300"
+            >
+              إلغاء
+            </button>
+            <button
+              type="button"
+              onClick={handleImportFile}
+              disabled={!importFile}
+              className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 disabled:opacity-50"
+            >
+              استيراد
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Purchases Modal */}
       {viewingCustodyPurchases && (

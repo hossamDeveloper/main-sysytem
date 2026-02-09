@@ -15,6 +15,8 @@ import { Modal } from '../../components/Modal';
 import { ConfirmModal } from '../../components/ConfirmModal';
 import { Toast } from '../../components/Toast';
 import { useModulePermissions } from '../../hooks/usePermissions';
+import { exportToExcel, importFromExcel } from '../../utils/excelUtils';
+import { purchasingApi } from '../../services/purchasingApi';
 
 export function PurchaseOrders() {
   const permissions = useModulePermissions('purchasing');
@@ -31,6 +33,8 @@ export function PurchaseOrders() {
   const [viewingPO, setViewingPO] = useState(null);
   const [itemToDelete, setItemToDelete] = useState(null);
   const [toast, setToast] = useState(null);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [importFile, setImportFile] = useState(null);
 
   const [formData, setFormData] = useState({
     supplierId: '',
@@ -103,18 +107,23 @@ export function PurchaseOrders() {
   const validateForm = () => {
     const errors = {};
     if (!formData.supplierId) errors.supplierId = 'المورد مطلوب';
-    if (!formData.custodyId) errors.custodyId = 'العهدة مطلوبة';
     if (!formData.deliveryDate) errors.deliveryDate = 'تاريخ التسليم مطلوب';
     if (!formData.paymentTerms) errors.paymentTerms = 'شروط الدفع مطلوبة';
     if (formData.items.length === 0) errors.items = 'يجب إضافة عنصر واحد على الأقل';
     
-    // Check if total amount exceeds custody remaining amount
+    // Check if total amount exceeds custody remaining amount (فقط إذا تم اختيار عهدة)
     const orderTotal = formData.items.reduce(
       (sum, item) => sum + (item.price || 0) * (item.quantity || 0),
       0
     );
-    if (formData.custodyRemainingAmount > 0 && orderTotal > formData.custodyRemainingAmount) {
-      errors.items = `إجمالي الطلب (${orderTotal.toFixed(2)}) يتجاوز المتبقي في العهدة (${formData.custodyRemainingAmount.toFixed(2)})`;
+    if (
+      formData.custodyId &&
+      formData.custodyRemainingAmount > 0 &&
+      orderTotal > formData.custodyRemainingAmount
+    ) {
+      errors.items = `إجمالي الطلب (${orderTotal.toFixed(
+        2
+      )}) يتجاوز المتبقي في العهدة (${formData.custodyRemainingAmount.toFixed(2)})`;
     }
     
     setFormErrors(errors);
@@ -436,6 +445,183 @@ export function PurchaseOrders() {
     printWindow.print();
   };
 
+  const handleExport = async () => {
+    try {
+      const res = await purchasingApi.getPurchaseOrders({ page: 1, limit: 100000 });
+      const allPOs = res?.data || [];
+
+      if (!allPOs.length) {
+        showToast('لا توجد أوامر شراء للتصدير', 'error');
+        return;
+      }
+
+      const rows = [];
+
+      allPOs.forEach((po) => {
+        const items = po.items || [];
+
+        // إذا لم يكن هناك عناصر، نحفظ رأس أمر الشراء فقط في صف واحد
+        if (!items.length) {
+          rows.push({
+            poNumber: po.poNumber,
+            supplierId: po.supplierId,
+            supplierName: po.supplierName,
+            custodyId: po.custodyId || '',
+            custodyNumber: po.custodyNumber || '',
+            responsibleEmployeeId: po.responsibleEmployeeId || '',
+            responsibleEmployeeName: po.responsibleEmployeeName || '',
+            deliveryDate: po.deliveryDate || '',
+            paymentTerms: po.paymentTerms || '',
+            status: po.status || 'Open',
+            totalAmount: po.totalAmount || 0,
+            itemProductId: '',
+            itemName: '',
+            itemQuantity: '',
+            itemPrice: '',
+            itemTotal: '',
+            notes: po.notes || '',
+            createdAt: po.createdAt || '',
+          });
+        } else {
+          // صف لكل عنصر مع تكرار بيانات رأس أمر الشراء
+          items.forEach((item) => {
+            const quantity = parseFloat(item.quantity || 0) || 0;
+            const price = parseFloat(item.price || 0) || 0;
+            const lineTotal = quantity * price;
+
+            rows.push({
+              poNumber: po.poNumber,
+              supplierId: po.supplierId,
+              supplierName: po.supplierName,
+              custodyId: po.custodyId || '',
+              custodyNumber: po.custodyNumber || '',
+              responsibleEmployeeId: po.responsibleEmployeeId || '',
+              responsibleEmployeeName: po.responsibleEmployeeName || '',
+              deliveryDate: po.deliveryDate || '',
+              paymentTerms: po.paymentTerms || '',
+              status: po.status || 'Open',
+              totalAmount: po.totalAmount || 0,
+              itemProductId: item.productId || '',
+              itemName: item.itemName || '',
+              itemQuantity: quantity,
+              itemPrice: price,
+              itemTotal: lineTotal,
+              notes: po.notes || '',
+              createdAt: po.createdAt || '',
+            });
+          });
+        }
+      });
+
+      exportToExcel(rows, 'purchase_orders', 'erp_export_purchase_orders.xlsx');
+      showToast('تم تصدير أوامر الشراء إلى Excel بنجاح');
+    } catch (error) {
+      console.error(error);
+      showToast('حدث خطأ أثناء التصدير', 'error');
+    }
+  };
+
+  const handleImportRows = (rows) => {
+    if (!Array.isArray(rows) || !rows.length) {
+      showToast('ملف الاستيراد فارغ أو غير صحيح', 'error');
+      return;
+    }
+
+    try {
+      // نجمع الصفوف حسب رقم أمر الشراء لبناء العناصر مع كل أمر
+      const poMap = new Map();
+
+      rows.forEach((row, idx) => {
+        const poNumber = row.poNumber || row['رقم الأمر'] || '';
+        if (!poNumber) return;
+
+        const key = poNumber.trim();
+        let existing = poMap.get(key);
+
+        if (!existing) {
+          const status = row.status || row['الحالة'] || 'Open';
+          existing = {
+            id:
+              row.id ||
+              `PO-IMP-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+            poNumber,
+            supplierId: row.supplierId || '',
+            supplierName: row.supplierName || row['المورد'] || '',
+            custodyId: row.custodyId || '',
+            custodyNumber: row.custodyNumber || row['العهدة'] || '',
+            responsibleEmployeeId: row.responsibleEmployeeId || '',
+            responsibleEmployeeName: row.responsibleEmployeeName || '',
+            deliveryDate: row.deliveryDate || row['تاريخ التسليم'] || '',
+            paymentTerms: row.paymentTerms || row['شروط الدفع'] || '',
+            status,
+            totalAmount: parseFloat(row.totalAmount || row['الإجمالي'] || 0) || 0,
+            items: [],
+            notes: row.notes || row['ملاحظات'] || '',
+            createdAt: row.createdAt || new Date().toISOString(),
+          };
+          poMap.set(key, existing);
+        }
+
+        // تكوين عنصر أمر الشراء من أعمدة العناصر إن وُجدت
+        const itemName = row.itemName || row['اسم العنصر'] || '';
+        const quantity =
+          parseFloat(row.itemQuantity ?? row['الكمية'] ?? 0) ||
+          0;
+        const price =
+          parseFloat(row.itemPrice ?? row['السعر'] ?? 0) ||
+          0;
+
+        if (itemName && quantity && price) {
+          existing.items.push({
+            id: `ITEM-IMP-${existing.poNumber}-${existing.items.length}-${Date.now()}`,
+            productId: row.itemProductId || row.productId || '',
+            itemName,
+            quantity,
+            price,
+          });
+        }
+      });
+
+      const poArray = Array.from(poMap.values()).map((po) => {
+        // إعادة حساب الإجمالي من العناصر إن وُجدت
+        if (po.items.length > 0) {
+          const recalculatedTotal = po.items.reduce(
+            (sum, item) => sum + (item.price || 0) * (item.quantity || 0),
+            0
+          );
+          return {
+            ...po,
+            totalAmount: recalculatedTotal,
+          };
+        }
+        return po;
+      });
+
+      // استبدال بيانات أوامر الشراء بالكامل من الملف
+      localStorage.setItem('purchasing_purchaseOrders', JSON.stringify(poArray));
+      showToast('تم استبدال أوامر الشراء بكامل تفاصيلها (بما في ذلك العناصر) من ملف Excel', 'success');
+    } catch (error) {
+      console.error(error);
+      showToast('حدث خطأ أثناء استيراد أوامر الشراء من الملف', 'error');
+    }
+  };
+
+  const handleImportFile = () => {
+    if (!importFile) return;
+    importFromExcel(
+      importFile,
+      (rows) => {
+        handleImportRows(rows);
+        setIsImportModalOpen(false);
+        setImportFile(null);
+      },
+      (error) => {
+        console.error(error);
+        showToast('فشل في قراءة ملف Excel', 'error');
+      }
+    );
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!validateForm()) return;
@@ -499,6 +685,23 @@ export function PurchaseOrders() {
     );
   };
 
+  const getResponsibleEmployeeDisplay = () => {
+    if (!viewingPO) return '-';
+    if (viewingPO.responsibleEmployeeName) return viewingPO.responsibleEmployeeName;
+    if (viewingPO.employeeName) return viewingPO.employeeName;
+    if (viewingCustody?.employeeName) return viewingCustody.employeeName;
+
+    // محاولة إضافية: البحث عن العهدة بالرقم في قائمة العهد المفتوحة
+    if (viewingPO.custodyNumber && openCustodiesData?.data) {
+      const c = openCustodiesData.data.find(
+        (custody) => custody.custodyNumber === viewingPO.custodyNumber
+      );
+      if (c?.employeeName) return c.employeeName;
+    }
+
+    return '-';
+  };
+
   const columns = [
     { key: 'poNumber', label: 'رقم الأمر' },
     { key: 'supplierName', label: 'المورد' },
@@ -524,14 +727,32 @@ export function PurchaseOrders() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-3xl font-bold text-gray-800">أوامر الشراء</h2>
-        {permissions.create && (
-          <button
-            onClick={handleOpenAdd}
-            className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
-          >
-            + إنشاء أمر شراء جديد
-          </button>
-        )}
+        <div className="flex gap-3">
+          {permissions.view && (
+            <>
+              <button
+                onClick={handleExport}
+                className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
+              >
+                تصدير Excel
+              </button>
+              <button
+                onClick={() => setIsImportModalOpen(true)}
+                className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
+              >
+                استيراد Excel
+              </button>
+            </>
+          )}
+          {permissions.create && (
+            <button
+              onClick={handleOpenAdd}
+              className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
+            >
+              + إنشاء أمر شراء جديد
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Filters */}
@@ -794,7 +1015,7 @@ export function PurchaseOrders() {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                العهدة <span className="text-red-500">*</span>
+                العهدة (اختياري لربط أمر الشراء بعهدة)
               </label>
               <select
                 value={formData.custodyId}
@@ -811,9 +1032,7 @@ export function PurchaseOrders() {
                   </option>
                 ))}
               </select>
-              {formErrors.custodyId && (
-                <p className="mt-1 text-sm text-red-600">{formErrors.custodyId}</p>
-              )}
+              {/* لم نعد نلزم باختيار عهدة عند إنشاء أمر الشراء */}
               {formData.custodyId && (
                 <div className="mt-2 p-3 bg-blue-50 rounded-lg text-sm">
                   <p className="text-gray-700">
@@ -1120,10 +1339,7 @@ export function PurchaseOrders() {
               <div>
                 <label className="text-sm font-medium text-gray-600">الموظف المسؤول</label>
                 <p className="text-gray-800">
-                  {viewingPO.responsibleEmployeeName ||
-                    viewingPO.employeeName ||
-                    viewingCustody?.employeeName ||
-                    '-'}
+                  {getResponsibleEmployeeDisplay()}
                 </p>
               </div>
               <div>
@@ -1210,6 +1426,50 @@ export function PurchaseOrders() {
         cancelText="إلغاء"
         danger
       />
+      
+      {/* Import Modal */}
+      <Modal
+        isOpen={isImportModalOpen}
+        onClose={() => {
+          setIsImportModalOpen(false);
+          setImportFile(null);
+        }}
+        title="استيراد أوامر الشراء من Excel (سيتم استبدال البيانات)"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <input
+            type="file"
+            accept=".xlsx,.xls"
+            onChange={(e) => setImportFile(e.target.files[0])}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg"
+          />
+          <div className="text-sm text-amber-700 bg-amber-50 p-3 rounded border border-amber-200">
+            ⚠️ سيتم استبدال بيانات أوامر الشراء الحالية بما في الملف. سيتم استيراد رأس أمر الشراء
+            والعناصر المرتبطة به إذا كانت أعمدة العناصر (itemName, itemQuantity, itemPrice) موجودة.
+          </div>
+          <div className="flex gap-3 justify-end">
+            <button
+              type="button"
+              onClick={() => {
+                setIsImportModalOpen(false);
+                setImportFile(null);
+              }}
+              className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300"
+            >
+              إلغاء
+            </button>
+            <button
+              type="button"
+              onClick={handleImportFile}
+              disabled={!importFile}
+              className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 disabled:opacity-50"
+            >
+              استيراد
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>

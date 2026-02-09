@@ -389,6 +389,11 @@ export const purchasingApi = {
       throw new Error('Purchase Order not found');
     }
 
+    // Prevent receiving goods if PO is not linked to a custody
+    if (!po.custodyId) {
+      throw new Error('لا يمكن استلام البضائع لأن أمر الشراء غير مرتبط بعهدة. يرجى ربط أمر الشراء بعهدة أولاً من شاشة صرف العهدة.');
+    }
+
     // Calculate total amount received
     const receivedItems = grnData.items || [];
     let totalReceivedAmount = 0;

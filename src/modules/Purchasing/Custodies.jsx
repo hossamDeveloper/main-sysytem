@@ -7,6 +7,7 @@ import {
   useDeleteCustody,
   usePurchaseOrders,
   useGoodsReceipts,
+  useUpdatePurchaseOrder,
 } from '../../services/purchasingQueries';
 import { useERPStorage } from '../../hooks/useERPStorage';
 import { Modal } from '../../components/Modal';
@@ -34,6 +35,7 @@ export function Custodies() {
   const [toast, setToast] = useState(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [importFile, setImportFile] = useState(null);
+  const [poToLinkId, setPoToLinkId] = useState('');
 
   // Calculate date filters
   const dateFilters = useMemo(() => {
@@ -70,6 +72,7 @@ export function Custodies() {
   const { data: employees } = useERPStorage('employees');
   const { data: allPurchaseOrders } = usePurchaseOrders({ limit: 10000 });
   const { data: allGoodsReceipts } = useGoodsReceipts({ limit: 10000 });
+  const linkPOMutation = useUpdatePurchaseOrder();
   const createMutation = useCreateCustody();
   const updateMutation = useUpdateCustody();
   const closeMutation = useCloseCustody();
@@ -164,15 +167,33 @@ export function Custodies() {
   };
 
   const handleExport = async () => {
+    const getEmployeeNameForExport = (custody) => {
+      if (custody.employeeName) return custody.employeeName;
+      if (custody.employeeId && employees) {
+        const employee = employees.find((e) => e.id === custody.employeeId);
+        if (employee?.name) return employee.name;
+      }
+      return custody.employeeId || '';
+    };
+
     try {
-      const res = await purchasingApi.getCustodies({ page: 1, limit: 100000 });
-      const allCustodies = res?.data || [];
-      const pos = allPurchaseOrders?.data || [];
-      const grns = allGoodsReceipts?.data || [];
+      const [custodiesRes, posRes, grnsRes] = await Promise.all([
+        purchasingApi.getCustodies({ page: 1, limit: 100000 }),
+        purchasingApi.getPurchaseOrders({ limit: 100000 }),
+        purchasingApi.getGoodsReceipts({ limit: 100000 }),
+      ]);
+
+      const allCustodies = custodiesRes?.data || [];
+      const pos = posRes?.data || [];
+      const grns = grnsRes?.data || [];
 
       const rows = [];
       allCustodies.forEach((c, idx) => {
-        const poList = pos.filter((po) => po.custodyId === c.id);
+        const poList = pos.filter(
+          (po) =>
+            po.custodyId === c.id ||
+            (po.custodyNumber && c.custodyNumber && po.custodyNumber === c.custodyNumber)
+        );
         const grnList = grns.filter((grn) => poList.some((po) => po.id === grn.poId));
 
         if (!poList.length && !grnList.length) {
@@ -180,7 +201,7 @@ export function Custodies() {
             custodyId: c.id,
             custodyNumber: c.custodyNumber,
             title: c.title,
-            employeeName: c.employeeName,
+            employeeName: getEmployeeNameForExport(c),
             amount: c.amount,
             spentAmount: c.spentAmount || 0,
             remainingAmount: c.remainingAmount ?? c.amount - (c.spentAmount || 0),
@@ -201,7 +222,7 @@ export function Custodies() {
                 custodyId: c.id,
                 custodyNumber: c.custodyNumber,
                 title: c.title,
-                employeeName: c.employeeName,
+                employeeName: getEmployeeNameForExport(c),
                 amount: c.amount,
                 spentAmount: c.spentAmount || 0,
                 remainingAmount: c.remainingAmount ?? c.amount - (c.spentAmount || 0),
@@ -220,7 +241,7 @@ export function Custodies() {
                   custodyId: c.id,
                   custodyNumber: c.custodyNumber,
                   title: c.title,
-                  employeeName: c.employeeName,
+                  employeeName: getEmployeeNameForExport(c),
                   amount: c.amount,
                   spentAmount: c.spentAmount || 0,
                   remainingAmount: c.remainingAmount ?? c.amount - (c.spentAmount || 0),
@@ -353,17 +374,39 @@ export function Custodies() {
     setIsPurchasesModalOpen(true);
   };
 
+  const handleLinkPurchaseOrder = async () => {
+    if (!poToLinkId || !viewingCustodyPurchases) return;
+    try {
+      await linkPOMutation.mutateAsync({
+        id: poToLinkId,
+        data: {
+          custodyId: viewingCustodyPurchases.id,
+          custodyNumber: viewingCustodyPurchases.custodyNumber,
+          responsibleEmployeeId: viewingCustodyPurchases.employeeId,
+          responsibleEmployeeName: viewingCustodyPurchases.employeeName,
+        },
+      });
+      showToast('تم ربط أمر الشراء بالعهدة بنجاح');
+      setPoToLinkId('');
+    } catch (error) {
+      showToast(error.message || 'حدث خطأ أثناء ربط أمر الشراء بالعهدة', 'error');
+    }
+  };
+
   // Calculate purchases for viewing custody
   const custodyPurchases = useMemo(() => {
     if (!viewingCustodyPurchases || !allPurchaseOrders?.data || !allGoodsReceipts?.data) {
-      return { purchaseOrders: [], goodsReceipts: [], totalPurchased: 0 };
+      return { purchaseOrders: [], goodsReceipts: [], totalPurchased: 0, availablePOsToLink: [] };
     }
 
     const custodyId = viewingCustodyPurchases.id;
+    const custodyNumber = viewingCustodyPurchases.custodyNumber;
     
     // Get purchase orders linked to this custody
     const purchaseOrders = (allPurchaseOrders.data || []).filter(
-      (po) => po.custodyId === custodyId
+      (po) =>
+        po.custodyId === custodyId ||
+        (po.custodyNumber && custodyNumber && po.custodyNumber === custodyNumber)
     );
 
     // Get goods receipts linked to these purchase orders
@@ -378,7 +421,14 @@ export function Custodies() {
       0
     );
 
-    return { purchaseOrders, goodsReceipts, totalPurchased };
+    // Purchase orders that can be linked to this custody (بدون عهدة حالياً)
+    const availablePOsToLink = (allPurchaseOrders.data || []).filter(
+      (po) =>
+        !po.custodyId &&
+        ['Open', 'Partially Received'].includes(po.status)
+    );
+
+    return { purchaseOrders, goodsReceipts, totalPurchased, availablePOsToLink };
   }, [viewingCustodyPurchases, allPurchaseOrders?.data, allGoodsReceipts?.data]);
 
   // Calculate employee statistics
@@ -965,9 +1015,35 @@ export function Custodies() {
 
             {/* Purchase Orders */}
             <div>
-              <h3 className="text-lg font-semibold text-gray-800 mb-3">
-                أوامر الشراء ({custodyPurchases.purchaseOrders.length})
-              </h3>
+              <div className="flex justify-between items-center mb-3">
+                <h3 className="text-lg font-semibold text-gray-800">
+                  أوامر الشراء ({custodyPurchases.purchaseOrders.length})
+                </h3>
+                {custodyPurchases.availablePOsToLink.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={poToLinkId}
+                      onChange={(e) => setPoToLinkId(e.target.value)}
+                      className="px-3 py-1 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    >
+                      <option value="">اختر أمر شراء لربطه بالعهدة</option>
+                      {custodyPurchases.availablePOsToLink.map((po) => (
+                        <option key={po.id} value={po.id}>
+                          {po.poNumber} - {po.supplierName} ({po.status === 'Open' ? 'مفتوح' : 'مستلم جزئياً'})
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={handleLinkPurchaseOrder}
+                      disabled={!poToLinkId || linkPOMutation.isPending}
+                      className="px-3 py-1 bg-sky-600 text-white rounded-lg text-sm hover:bg-sky-700 disabled:opacity-50"
+                    >
+                      {linkPOMutation.isPending ? 'جاري الربط...' : 'ربط'}
+                    </button>
+                  </div>
+                )}
+              </div>
               {custodyPurchases.purchaseOrders.length === 0 ? (
                 <p className="text-gray-500 text-sm">لا توجد أوامر شراء مرتبطة بهذه العهدة</p>
               ) : (

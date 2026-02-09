@@ -11,6 +11,8 @@ import { Modal } from '../../components/Modal';
 import { ConfirmModal } from '../../components/ConfirmModal';
 import { Toast } from '../../components/Toast';
 import { useModulePermissions } from '../../hooks/usePermissions';
+import { exportToExcel, importFromExcel } from '../../utils/excelUtils';
+import { purchasingApi } from '../../services/purchasingApi';
 
 export function GoodsReceipt() {
   const permissions = useModulePermissions('purchasing');
@@ -26,6 +28,8 @@ export function GoodsReceipt() {
   const [editingGRN, setEditingGRN] = useState(null);
   const [grnToDelete, setGrnToDelete] = useState(null);
   const [toast, setToast] = useState(null);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [importFile, setImportFile] = useState(null);
 
   // Calculate date filters
   const dateFilters = useMemo(() => {
@@ -116,9 +120,15 @@ export function GoodsReceipt() {
       errors.items = 'يجب إدخال كمية مستلمة لعنصر واحد على الأقل';
     }
     
-    // Check custody balance if PO has custody linked
-    if (selectedCustody && totalReceivedAmount > custodyRemainingAmount) {
-      errors.custody = `مبلغ الاستلام (${totalReceivedAmount.toFixed(2)} ج.م) يتجاوز المتبقي في العهدة (${custodyRemainingAmount.toFixed(2)} ج.م)`;
+    // Require custody: لا يمكن استلام أمر شراء غير مرتبط بعهدة
+    if (!selectedCustody) {
+      errors.custody =
+        'لا يمكن استلام البضائع لأن أمر الشراء غير مرتبط بعهدة. يرجى ربط أمر الشراء بعهدة أولاً من شاشة صرف العهدة.';
+    } else if (totalReceivedAmount > custodyRemainingAmount) {
+      // Check custody balance if PO has custody linked
+      errors.custody = `مبلغ الاستلام (${totalReceivedAmount.toFixed(
+        2
+      )} ج.م) يتجاوز المتبقي في العهدة (${custodyRemainingAmount.toFixed(2)} ج.م)`;
     }
     
     setFormErrors(errors);
@@ -298,6 +308,97 @@ export function GoodsReceipt() {
     }
   };
 
+  const handleExport = async () => {
+    try {
+      const res = await purchasingApi.getGoodsReceipts({ page: 1, limit: 100000 });
+      const allGRNs = res?.data || [];
+
+      if (!allGRNs.length) {
+        showToast('لا توجد استلامات بضائع للتصدير', 'error');
+        return;
+      }
+
+      const rows = allGRNs.map((grn) => ({
+        grnNumber: grn.grnNumber,
+        poId: grn.poId,
+        poNumber: grn.poNumber,
+        supplierName: grn.supplierName,
+        receivingDate: grn.receivingDate,
+        totalReceivedAmount: grn.totalReceivedAmount,
+        custodyNumber: grn.custodyDeduction?.custodyNumber || '',
+        employeeName: grn.custodyDeduction?.employeeName || '',
+        amountDeducted: grn.custodyDeduction?.amountDeducted || 0,
+        remainingAfterDeduction: grn.custodyDeduction?.remainingAfterDeduction || 0,
+        notes: grn.notes || '',
+        createdAt: grn.createdAt || '',
+      }));
+
+      exportToExcel(rows, 'goods_receipts', 'erp_export_goods_receipts.xlsx');
+      showToast('تم تصدير استلامات البضائع إلى Excel بنجاح');
+    } catch (error) {
+      console.error(error);
+      showToast('حدث خطأ أثناء التصدير', 'error');
+    }
+  };
+
+  const handleImportRows = (rows) => {
+    if (!Array.isArray(rows) || !rows.length) {
+      showToast('ملف الاستيراد فارغ أو غير صحيح', 'error');
+      return;
+    }
+
+    try {
+      const grnArray = rows.map((row, idx) => ({
+        id: `GRN-IMP-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+        grnNumber: row.grnNumber || row['رقم الاستلام'] || '',
+        poId: row.poId || '',
+        poNumber: row.poNumber || row['رقم أمر الشراء'] || '',
+        supplierName: row.supplierName || row['المورد'] || '',
+        receivingDate: row.receivingDate || row['تاريخ الاستلام'] || '',
+        totalReceivedAmount:
+          parseFloat(row.totalReceivedAmount || row['إجمالي المبلغ'] || 0) || 0,
+        custodyDeduction: row.custodyNumber
+          ? {
+              custodyId: '',
+              custodyNumber: row.custodyNumber,
+              employeeName: row.employeeName || '',
+              amountDeducted:
+                parseFloat(row.amountDeducted || row['المبلغ المخصوم'] || 0) || 0,
+              remainingAfterDeduction:
+                parseFloat(
+                  row.remainingAfterDeduction || row['المتبقي بعد الخصم'] || 0
+                ) || 0,
+            }
+          : null,
+        items: [],
+        notes: row.notes || row['ملاحظات'] || '',
+        createdAt: row.createdAt || new Date().toISOString(),
+      }));
+
+      localStorage.setItem('purchasing_goodsReceipts', JSON.stringify(grnArray));
+      showToast('تم استبدال بيانات استلامات البضائع من ملف Excel', 'success');
+    } catch (error) {
+      console.error(error);
+      showToast('حدث خطأ أثناء استيراد استلامات البضائع من الملف', 'error');
+    }
+  };
+
+  const handleImportFile = () => {
+    if (!importFile) return;
+    importFromExcel(
+      importFile,
+      (rows) => {
+        handleImportRows(rows);
+        setIsImportModalOpen(false);
+        setImportFile(null);
+      },
+      (error) => {
+        console.error(error);
+        showToast('فشل في قراءة ملف Excel', 'error');
+      }
+    );
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!validateForm()) return;
@@ -328,11 +429,11 @@ export function GoodsReceipt() {
     );
   }
 
-  // Filter POs that can receive goods
+  // Filter POs that can receive goods (must be linked to a custody)
   const availablePOs = useMemo(() => {
     if (!posData?.data) return [];
-    return posData.data.filter((po) => 
-      ['Open', 'Partially Received'].includes(po.status)
+    return posData.data.filter(
+      (po) => ['Open', 'Partially Received'].includes(po.status) && po.custodyId
     );
   }, [posData?.data]);
 
@@ -361,14 +462,32 @@ export function GoodsReceipt() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-3xl font-bold text-gray-800">استلام البضائع</h2>
-        {permissions.create && (
-          <button
-            onClick={handleOpenAdd}
-            className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
-          >
-            + تسجيل استلام جديد
-          </button>
-        )}
+        <div className="flex gap-3">
+          {permissions.view && (
+            <>
+              <button
+                onClick={handleExport}
+                className="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors"
+              >
+                تصدير Excel
+              </button>
+              <button
+                onClick={() => setIsImportModalOpen(true)}
+                className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
+              >
+                استيراد Excel
+              </button>
+            </>
+          )}
+          {permissions.create && (
+            <button
+              onClick={handleOpenAdd}
+              className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors"
+            >
+              + تسجيل استلام جديد
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Filters */}
@@ -886,6 +1005,50 @@ export function GoodsReceipt() {
         cancelText="إلغاء"
         danger
       />
+
+      {/* Import Modal */}
+      <Modal
+        isOpen={isImportModalOpen}
+        onClose={() => {
+          setIsImportModalOpen(false);
+          setImportFile(null);
+        }}
+        title="استيراد استلامات البضائع من Excel (سيتم استبدال البيانات)"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <input
+            type="file"
+            accept=".xlsx,.xls"
+            onChange={(e) => setImportFile(e.target.files[0])}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg"
+          />
+          <div className="text-sm text-amber-700 bg-amber-50 p-3 rounded border border-amber-200">
+            ⚠️ سيتم استبدال بيانات استلامات البضائع الحالية بما في الملف (سيتم استيراد بيانات
+            الاستلام فقط بدون تفاصيل العناصر، وقد لا تنعكس التغييرات على أرصدة العهدة).
+          </div>
+          <div className="flex gap-3 justify-end">
+            <button
+              type="button"
+              onClick={() => {
+                setIsImportModalOpen(false);
+                setImportFile(null);
+              }}
+              className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300"
+            >
+              إلغاء
+            </button>
+            <button
+              type="button"
+              onClick={handleImportFile}
+              disabled={!importFile}
+              className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 disabled:opacity-50"
+            >
+              استيراد
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>

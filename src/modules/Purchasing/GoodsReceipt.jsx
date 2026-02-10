@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   useGoodsReceipts,
   usePurchaseOrders,
@@ -15,6 +16,7 @@ import { exportToExcel, importFromExcel } from '../../utils/excelUtils';
 import { purchasingApi } from '../../services/purchasingApi';
 
 export function GoodsReceipt() {
+  const queryClient = useQueryClient();
   const permissions = useModulePermissions('purchasing');
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
@@ -149,6 +151,7 @@ export function GoodsReceipt() {
 
   const handlePOChange = (poId) => {
     const po = posData?.data?.find((p) => p.id === poId);
+    
     if (po) {
       setSelectedPO(po);
       
@@ -293,6 +296,7 @@ export function GoodsReceipt() {
   const handleDelete = (grn) => {
     setGrnToDelete(grn);
     setIsDeleteModalOpen(true);
+    
   };
 
   const confirmDelete = async () => {
@@ -307,6 +311,7 @@ export function GoodsReceipt() {
       }
     }
   };
+
 
   const handleExport = async () => {
     try {
@@ -376,6 +381,10 @@ export function GoodsReceipt() {
       }));
 
       localStorage.setItem('purchasing_goodsReceipts', JSON.stringify(grnArray));
+
+      // Refresh goods receipts list after replacing data in localStorage
+      queryClient.invalidateQueries({ queryKey: ['goodsReceipts'] });
+
       showToast('تم استبدال بيانات استلامات البضائع من ملف Excel', 'success');
     } catch (error) {
       console.error(error);
@@ -940,7 +949,7 @@ export function GoodsReceipt() {
                   </div>
                   <div>
                     <span className="text-gray-600">الموظف:</span>{' '}
-                    <span className="font-medium">{viewingGRN.custodyDeduction.employeeName}</span>
+                    <span className="font-medium">{viewingGRN.custodyDeduction.responsibleEmployeeId}</span>
                   </div>
                   <div>
                     <span className="text-gray-600">المبلغ المخصوم:</span>{' '}

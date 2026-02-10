@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   useCustodies,
   useCreateCustody,
@@ -18,6 +19,7 @@ import { exportToExcel, importFromExcel } from '../../utils/excelUtils';
 import { purchasingApi } from '../../services/purchasingApi';
 
 export function Custodies() {
+  const queryClient = useQueryClient();
   const permissions = useModulePermissions('purchasing');
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
@@ -313,6 +315,9 @@ export function Custodies() {
     const custodiesArr = Array.from(custodiesMap.values());
 
     localStorage.setItem('purchasing_custodies', JSON.stringify(custodiesArr));
+
+    // Refresh custodies list after replacing data in localStorage
+    queryClient.invalidateQueries({ queryKey: ['custodies'] });
 
     showToast('تم استبدال بيانات العهد فقط من ملف Excel (تم مسح العهد القديمة)', 'success');
   };
@@ -1085,14 +1090,12 @@ export function Custodies() {
                       <div className="mt-2">
                         <p className="text-sm text-gray-600">العناصر:</p>
                         <ul className="list-disc list-inside text-sm text-gray-700 mt-1">
-                          {po.items?.slice(0, 3).map((item, idx) => (
+                          {po.items?.map((item, idx) => (
                             <li key={idx}>
                               {item.itemName} - {item.quantity} × {item.price} ج.م
                             </li>
                           ))}
-                          {po.items?.length > 3 && (
-                            <li className="text-gray-500">... و {po.items.length - 3} عنصر آخر</li>
-                          )}
+                         
                         </ul>
                       </div>
                     </div>

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   usePurchaseOrders,
   useSuppliers,
@@ -19,6 +20,7 @@ import { exportToExcel, importFromExcel } from '../../utils/excelUtils';
 import { purchasingApi } from '../../services/purchasingApi';
 
 export function PurchaseOrders() {
+  const queryClient = useQueryClient();
   const permissions = useModulePermissions('purchasing');
   const { user } = useAppSelector((state) => state.auth);
   const [page, setPage] = useState(1);
@@ -90,6 +92,8 @@ export function PurchaseOrders() {
   });
   const { data: suppliersData } = useSuppliers({ limit: 1000 });
   const { data: openCustodiesData } = useCustodies({ limit: 1000, status: 'Issued' });
+  // كل العهد (مفتوحة ومغلقة) لاستخدامها في عرض الموظف المسؤول
+  const { data: allCustodiesData } = useCustodies({ limit: 1000 });
   const { data: productsData } = useProducts({ limit: 1000 });
   const { data: supplierProductsData } = useSupplierProducts(formData.supplierId || null, {
     limit: 1000,
@@ -612,6 +616,8 @@ export function PurchaseOrders() {
       importFile,
       (rows) => {
         handleImportRows(rows);
+        // Refresh purchase orders list after replacing data in localStorage
+        queryClient.invalidateQueries({ queryKey: ['purchaseOrders'] });
         setIsImportModalOpen(false);
         setImportFile(null);
       },
@@ -685,22 +691,29 @@ export function PurchaseOrders() {
     );
   };
 
-  const getResponsibleEmployeeDisplay = () => {
-    if (!viewingPO) return '-';
-    if (viewingPO.responsibleEmployeeName) return viewingPO.responsibleEmployeeName;
-    if (viewingPO.employeeName) return viewingPO.employeeName;
-    if (viewingCustody?.employeeName) return viewingCustody.employeeName;
+  // const getResponsibleEmployeeDisplay = () => {
+  //  console.log(viewingPO.responsibleEmployeeId);
+   
+  //   if (viewingPO.responsibleEmployeeName) return viewingPO.responsibleEmployeeName;
+  //   if (viewingPO.employeeName) return viewingPO.employeeName;
+  //   if (viewingCustody?.employeeName) return viewingCustody.employeeName;
 
-    // محاولة إضافية: البحث عن العهدة بالرقم في قائمة العهد المفتوحة
-    if (viewingPO.custodyNumber && openCustodiesData?.data) {
-      const c = openCustodiesData.data.find(
-        (custody) => custody.custodyNumber === viewingPO.custodyNumber
-      );
-      if (c?.employeeName) return c.employeeName;
-    }
+  //   // محاولة إضافية: البحث عن العهدة بالمعرّف في كل العهد (حتى لو كانت مغلقة)
+  //   if (viewingPO.custodyId && allCustodiesData?.data) {
+  //     const cById = allCustodiesData.data.find((custody) => custody.id === viewingPO.custodyId);
+  //     if (cById?.employeeName) return cById.employeeName;
+  //   }
 
-    return '-';
-  };
+  //   // محاولة إضافية: البحث عن العهدة بالرقم في كل العهد (مفتوحة أو مغلقة)
+  //   if (viewingPO.custodyNumber && allCustodiesData?.data) {
+  //     const cByNumber = allCustodiesData.data.find(
+  //       (custody) => custody.custodyNumber === viewingPO.custodyNumber
+  //     );
+  //     if (cByNumber?.employeeName) return cByNumber.employeeName;
+  //   }
+
+  //  return ;
+  // };
 
   const columns = [
     { key: 'poNumber', label: 'رقم الأمر' },
@@ -1339,7 +1352,7 @@ export function PurchaseOrders() {
               <div>
                 <label className="text-sm font-medium text-gray-600">الموظف المسؤول</label>
                 <p className="text-gray-800">
-                  {getResponsibleEmployeeDisplay()}
+                  {viewingPO.responsibleEmployeeId || '-'}
                 </p>
               </div>
               <div>

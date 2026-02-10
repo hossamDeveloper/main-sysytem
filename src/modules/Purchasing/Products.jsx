@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   useProducts,
   useCreateProduct,
@@ -14,6 +15,7 @@ import { exportToExcel, importFromExcel } from '../../utils/excelUtils';
 import { purchasingApi } from '../../services/purchasingApi';
 
 export function Products() {
+  const queryClient = useQueryClient();
   const permissions = useModulePermissions('purchasing');
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
@@ -241,6 +243,11 @@ export function Products() {
     localStorage.setItem('purchasing_products', JSON.stringify(productsArr));
     localStorage.setItem('purchasing_suppliers', JSON.stringify(suppliersArr));
     localStorage.setItem('purchasing_supplierProducts', JSON.stringify(supplierProducts));
+
+    // Refresh related lists after replacing data in localStorage
+    queryClient.invalidateQueries({ queryKey: ['products'] });
+    queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+    queryClient.invalidateQueries({ queryKey: ['supplierProducts'] });
 
     showToast(
       'تم استبدال بيانات المنتجات والموردين والربط بينهم بالكامل من ملف Excel بنجاح',

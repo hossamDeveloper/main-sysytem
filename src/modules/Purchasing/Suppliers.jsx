@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   useSuppliers,
   useCreateSupplier,
@@ -18,6 +19,7 @@ import { useModulePermissions } from '../../hooks/usePermissions';
 import { purchasingApi } from '../../services/purchasingApi';
 
 export function Suppliers() {
+  const queryClient = useQueryClient();
   const permissions = useModulePermissions('purchasing');
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
@@ -357,7 +359,15 @@ export function Suppliers() {
     localStorage.setItem('purchasing_products', JSON.stringify(productsArr));
     localStorage.setItem('purchasing_supplierProducts', JSON.stringify(supplierProducts));
 
-    showToast('تم استبدال بيانات الموردين ومنتجاتهم من ملف Excel بنجاح (تم مسح القديم بالكامل)', 'success');
+    // Refresh related lists after replacing data in localStorage
+    queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+    queryClient.invalidateQueries({ queryKey: ['products'] });
+    queryClient.invalidateQueries({ queryKey: ['supplierProducts'] });
+
+    showToast(
+      'تم استبدال بيانات الموردين ومنتجاتهم من ملف Excel بنجاح (تم مسح القديم بالكامل)',
+      'success'
+    );
   };
 
   if (!permissions.view) {

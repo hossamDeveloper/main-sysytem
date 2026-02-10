@@ -407,7 +407,7 @@ export function PurchaseOrders() {
             <div class="box"><span class="label">المورد:</span> ${po.supplierName || '-'}</div>
             <div class="box"><span class="label">العهدة:</span> ${po.custodyNumber || '-'}</div>
             <div class="box"><span class="label">الموظف المسؤول:</span> ${
-              po.responsibleEmployeeName || po.employeeName || viewingCustody?.employeeName || '-'
+              viewingPO.responsibleEmployeeId || '-'
             }</div>
             <div class="box"><span class="label">تاريخ التسليم:</span> ${po.deliveryDate || '-'}</div>
             <div class="box"><span class="label">شروط الدفع:</span> ${po.paymentTerms || '-'}</div>

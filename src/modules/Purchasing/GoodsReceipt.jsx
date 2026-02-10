@@ -323,20 +323,33 @@ export function GoodsReceipt() {
         return;
       }
 
-      const rows = allGRNs.map((grn) => ({
-        grnNumber: grn.grnNumber,
-        poId: grn.poId,
-        poNumber: grn.poNumber,
-        supplierName: grn.supplierName,
-        receivingDate: grn.receivingDate,
-        totalReceivedAmount: grn.totalReceivedAmount,
-        custodyNumber: grn.custodyDeduction?.custodyNumber || '',
-        employeeName: grn.custodyDeduction?.employeeName || '',
-        amountDeducted: grn.custodyDeduction?.amountDeducted || 0,
-        remainingAfterDeduction: grn.custodyDeduction?.remainingAfterDeduction || 0,
-        notes: grn.notes || '',
-        createdAt: grn.createdAt || '',
-      }));
+      // Flatten GRNs with their received items so that
+      // each received item appears as a separate row in Excel
+      const rows = allGRNs.flatMap((grn) => {
+        const items = Array.isArray(grn.items) && grn.items.length ? grn.items : [null];
+
+        return items.map((item) => ({
+          // Header-level GRN data
+          grnNumber: grn.grnNumber,
+          poId: grn.poId,
+          poNumber: grn.poNumber,
+          supplierName: grn.supplierName,
+          receivingDate: grn.receivingDate,
+          totalReceivedAmount: grn.totalReceivedAmount,
+          custodyNumber: grn.custodyDeduction?.custodyNumber || '',
+          employeeName: grn.custodyDeduction?.employeeName || '',
+          amountDeducted: grn.custodyDeduction?.amountDeducted || 0,
+          remainingAfterDeduction: grn.custodyDeduction?.remainingAfterDeduction || 0,
+          notes: grn.notes || '',
+          createdAt: grn.createdAt || '',
+
+          // Item-level data
+          itemName: item?.itemName || '',
+          receivedQuantity: item?.receivedQuantity || 0,
+          price: item?.price || 0,
+          totalItemAmount: item?.totalAmount || 0,
+        }));
+      });
 
       exportToExcel(rows, 'goods_receipts', 'erp_export_goods_receipts.xlsx');
       showToast('تم تصدير استلامات البضائع إلى Excel بنجاح');
@@ -353,39 +366,103 @@ export function GoodsReceipt() {
     }
 
     try {
-      const grnArray = rows.map((row, idx) => ({
-        id: `GRN-IMP-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
-        grnNumber: row.grnNumber || row['رقم الاستلام'] || '',
-        poId: row.poId || '',
-        poNumber: row.poNumber || row['رقم أمر الشراء'] || '',
-        supplierName: row.supplierName || row['المورد'] || '',
-        receivingDate: row.receivingDate || row['تاريخ الاستلام'] || '',
-        totalReceivedAmount:
-          parseFloat(row.totalReceivedAmount || row['إجمالي المبلغ'] || 0) || 0,
-        custodyDeduction: row.custodyNumber
-          ? {
-              custodyId: '',
-              custodyNumber: row.custodyNumber,
-              employeeName: row.employeeName || '',
-              amountDeducted:
-                parseFloat(row.amountDeducted || row['المبلغ المخصوم'] || 0) || 0,
-              remainingAfterDeduction:
-                parseFloat(
-                  row.remainingAfterDeduction || row['المتبقي بعد الخصم'] || 0
-                ) || 0,
-            }
-          : null,
-        items: [],
-        notes: row.notes || row['ملاحظات'] || '',
-        createdAt: row.createdAt || new Date().toISOString(),
-      }));
+      // نبني خريطة بحيث يتم تجميع صفوف العناصر تحت نفس رقم الاستلام
+      const grnMap = new Map();
+
+      rows.forEach((row, idx) => {
+        const grnNumber = row.grnNumber || row['رقم الاستلام'] || '';
+        const poNumber = row.poNumber || row['رقم أمر الشراء'] || '';
+        const receivingDate = row.receivingDate || row['تاريخ الاستلام'] || '';
+
+        // مفتاح مميز لكل استلام (يمكن توسيعه لاحقاً إذا لزم الأمر)
+        const key = `${grnNumber}__${poNumber}__${receivingDate}__${idx}`;
+
+        // نحاول إيجاد GRN موجود بنفس رقم الاستلام ورقم أمر الشراء وتاريخ الاستلام
+        let existingEntry = Array.from(grnMap.values()).find(
+          (g) =>
+            g.grnNumber === grnNumber &&
+            g.poNumber === poNumber &&
+            g.receivingDate === receivingDate
+        );
+
+        if (!existingEntry) {
+          existingEntry = {
+            id: `GRN-IMP-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            grnNumber,
+            poId: row.poId || '',
+            poNumber,
+            supplierName: row.supplierName || row['المورد'] || '',
+            receivingDate,
+            totalReceivedAmount:
+              parseFloat(row.totalReceivedAmount || row['إجمالي المبلغ'] || 0) || 0,
+            custodyDeduction: row.custodyNumber
+              ? {
+                  custodyId: '',
+                  custodyNumber: row.custodyNumber,
+                  employeeName: row.employeeName || '',
+                  amountDeducted:
+                    parseFloat(row.amountDeducted || row['المبلغ المخصوم'] || 0) || 0,
+                  remainingAfterDeduction:
+                    parseFloat(
+                      row.remainingAfterDeduction || row['المتبقي بعد الخصم'] || 0
+                    ) || 0,
+                }
+              : null,
+            items: [],
+            notes: row.notes || row['ملاحظات'] || '',
+            createdAt: row.createdAt || new Date().toISOString(),
+          };
+
+          grnMap.set(key, existingEntry);
+        }
+
+        // قراءة بيانات العنصر من الصف (إن وُجدت)
+        const itemName = row.itemName || row['اسم العنصر'] || '';
+        const receivedQuantityRaw =
+          row.receivedQuantity || row['الكمية المستلمة'] || row['المستلم'] || 0;
+        const priceRaw = row.price || row['السعر'] || 0;
+        const totalItemAmountRaw =
+          row.totalItemAmount || row['الإجمالي'] || row['إجمالي البند'] || 0;
+
+        const receivedQuantity = parseFloat(receivedQuantityRaw || 0) || 0;
+        const price = parseFloat(priceRaw || 0) || 0;
+        const totalItemAmount =
+          parseFloat(totalItemAmountRaw || receivedQuantity * price || 0) || 0;
+
+        // إذا لم تكن هناك بيانات عنصر في هذا الصف، نتجاهل إضافة عنصر
+        if (itemName || receivedQuantity || price || totalItemAmount) {
+          existingEntry.items.push({
+            itemId: '',
+            itemName,
+            receivedQuantity,
+            price,
+            totalAmount: totalItemAmount,
+          });
+        }
+      });
+
+      const grnArray = Array.from(grnMap.values()).map((grn) => {
+        // إذا لم يكن إجمالي مبلغ الاستلام موجوداً أو يساوي صفر، نحسبه من إجمالي العناصر
+        const itemsTotal = grn.items.reduce(
+          (sum, item) => sum + (parseFloat(item.totalAmount) || 0),
+          0
+        );
+
+        return {
+          ...grn,
+          totalReceivedAmount:
+            grn.totalReceivedAmount && grn.totalReceivedAmount > 0
+              ? grn.totalReceivedAmount
+              : itemsTotal,
+        };
+      });
 
       localStorage.setItem('purchasing_goodsReceipts', JSON.stringify(grnArray));
 
       // Refresh goods receipts list after replacing data in localStorage
       queryClient.invalidateQueries({ queryKey: ['goodsReceipts'] });
 
-      showToast('تم استبدال بيانات استلامات البضائع من ملف Excel', 'success');
+      showToast('تم استبدال بيانات استلامات البضائع من ملف Excel مع تفاصيل العناصر', 'success');
     } catch (error) {
       console.error(error);
       showToast('حدث خطأ أثناء استيراد استلامات البضائع من الملف', 'error');
@@ -1033,8 +1110,8 @@ export function GoodsReceipt() {
             className="w-full px-4 py-2 border border-gray-300 rounded-lg"
           />
           <div className="text-sm text-amber-700 bg-amber-50 p-3 rounded border border-amber-200">
-            ⚠️ سيتم استبدال بيانات استلامات البضائع الحالية بما في الملف (سيتم استيراد بيانات
-            الاستلام فقط بدون تفاصيل العناصر، وقد لا تنعكس التغييرات على أرصدة العهدة).
+            ⚠️ سيتم استبدال بيانات استلامات البضائع الحالية بما في الملف (مع محاولة استيراد تفاصيل
+            العناصر والخصومات من العهدة حسب البيانات الموجودة في الملف).
           </div>
           <div className="flex gap-3 justify-end">
             <button

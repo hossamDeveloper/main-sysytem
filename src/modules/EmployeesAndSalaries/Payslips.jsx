@@ -1362,9 +1362,17 @@ export function Payslips() {
         const loanDeductions = item.deductions
           .filter((d) => d.source === "erp_loans")
           .reduce((sum, d) => sum + parseFloat(d.amount || 0), 0);
-        const absenceDeductions = item.deductions
-          .filter((d) => (d.type || "").includes("غياب"))
-          .reduce((sum, d) => sum + parseFloat(d.amount || 0), 0);
+        // خصم الغياب + جزاءات + تأمين كما تُحسب في كل صف (لتطابق الإجمالي مع الجدول)
+        let absenceAmount = 0;
+        if ((item.calculationType || "monthly") === "monthly") {
+          const absentDays = getAbsentDays(
+            item.employeeId,
+            item.periodStart,
+            item.periodEnd
+          );
+          const dailySalary = (basic + allow) / 30;
+          absenceAmount = absentDays > 0 ? dailySalary * absentDays : 0;
+        }
         const penalties = parseFloat(item.penalties || 0);
         const insurance = parseFloat(item.insurance || 0);
 
@@ -1372,7 +1380,7 @@ export function Payslips() {
         // إجمالي (أساسي + بدلات) = مجموع عمودي الأساسي والبدلات كما تظهر في الجدول
         acc.totalBaseAllow += basic + allow;
         acc.totalRewards += rewards + extraNet;
-        acc.totalDeductions += absenceDeductions + penalties + insurance;
+        acc.totalDeductions += absenceAmount + penalties + insurance;
         return acc;
       },
       { totalLoans: 0, totalBaseAllow: 0, totalRewards: 0, totalDeductions: 0 }

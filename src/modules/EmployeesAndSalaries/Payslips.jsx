@@ -1369,18 +1369,8 @@ export function Payslips() {
         const insurance = parseFloat(item.insurance || 0);
 
         acc.totalLoans += loanDeductions;
-        // في الوضع اليومي، إجمالي (أساسي + بدلات) يحتسب على أساس أيام الحضور
-        if ((item.calculationType || "monthly") === "daily") {
-          const attendanceDays = getAttendanceDays(
-            item.employeeId,
-            item.periodStart,
-            item.periodEnd
-          );
-          const dailySalary = (basic + allow) / 30;
-          acc.totalBaseAllow += dailySalary * attendanceDays;
-        } else {
-          acc.totalBaseAllow += basic + allow;
-        }
+        // إجمالي (أساسي + بدلات) = مجموع عمودي الأساسي والبدلات كما تظهر في الجدول
+        acc.totalBaseAllow += basic + allow;
         acc.totalRewards += rewards + extraNet;
         acc.totalDeductions += absenceDeductions + penalties + insurance;
         return acc;

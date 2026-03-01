@@ -1362,16 +1362,26 @@ export function Payslips() {
         const loanDeductions = item.deductions
           .filter((d) => d.source === "erp_loans")
           .reduce((sum, d) => sum + parseFloat(d.amount || 0), 0);
-        // خصم الغياب + جزاءات + تأمين كما تُحسب في كل صف (لتطابق الإجمالي مع الجدول)
+        // خصم الغياب: للشهري = أيام الغياب × الراتب اليومي؛ لليومي فقط = (أساسي + بدلات) - (الراتب اليومي × أيام الحضور)
+        const dailySalaryForTotal = (basic + allow) / 30;
         let absenceAmount = 0;
-        if ((item.calculationType || "monthly") === "monthly") {
-          const absentDays = getAbsentDays(
+        if ((item.calculationType || "monthly") === "daily") {
+          const attendanceDaysForTotal = getAttendanceDays(
             item.employeeId,
             item.periodStart,
             item.periodEnd
           );
-          const dailySalary = (basic + allow) / 30;
-          absenceAmount = absentDays > 0 ? dailySalary * absentDays : 0;
+          absenceAmount = Math.max(
+            0,
+            parseFloat(((basic + allow) - dailySalaryForTotal * attendanceDaysForTotal).toFixed(2))
+          );
+        } else {
+          const absentDaysForTotal = getAbsentDays(
+            item.employeeId,
+            item.periodStart,
+            item.periodEnd
+          );
+          absenceAmount = absentDaysForTotal > 0 ? dailySalaryForTotal * absentDaysForTotal : 0;
         }
         const penalties = parseFloat(item.penalties || 0);
         const insurance = parseFloat(item.insurance || 0);
@@ -1413,26 +1423,38 @@ export function Payslips() {
       const earlyLeaveHrs = parseFloat(item.earlyLeaveHours || 0);
       const lateDeduction = lateHrs * hourlyRate;
       const earlyLeaveDeduction = earlyLeaveHrs * hourlyRate;
-      const extraTotal = overtimePay + fridayBonus - lateDeduction - earlyLeaveDeduction;
+      // عمود الإضافي = الساعات الإضافية فقط بعد خصم التأخير والانصراف المبكر
+      const extraColumnValue = overtimePay - lateDeduction - earlyLeaveDeduction;
 
       const absentDays = getAbsentDays(
         item.employeeId,
         item.periodStart,
         item.periodEnd
       );
+      const attendanceDays = getAttendanceDays(
+        item.employeeId,
+        item.periodStart,
+        item.periodEnd
+      );
       let absenceDisplay;
       if ((item.calculationType || "monthly") === "daily") {
-        const attendanceDays = getAttendanceDays(
-          item.employeeId,
-          item.periodStart,
-          item.periodEnd
+        // للموظفين بالطريقة اليومية فقط: خصم الغياب = (أساسي + بدلات) - (الراتب اليومي × أيام الحضور)
+        const totalBase = basicSalary + allowances;
+        const absenceDeductionAmount = Math.max(
+          0,
+          parseFloat((totalBase - dailySalary * attendanceDays).toFixed(2))
         );
-        absenceDisplay = `${attendanceDays} يوم حضور`;
+        absenceDisplay =
+          absenceDeductionAmount > 0
+            ? `${attendanceDays} يوم حضور (-${absenceDeductionAmount.toFixed(2)} ج.م)`
+            : `${attendanceDays} يوم حضور`;
       } else {
-        const absenceDeductionAmount = absentDays > 0
-          ? dailySalary * absentDays
-          : 0;
-        absenceDisplay = `${absentDays} يوم${absenceDeductionAmount > 0 ? ` (-${absenceDeductionAmount.toFixed(2)} ج.م)` : ""}`;
+        // الطريقة الشهرية: أيام الغياب × الراتب اليومي
+        const absenceDeductionAmount = absentDays > 0 ? dailySalary * absentDays : 0;
+        absenceDisplay =
+          absenceDeductionAmount > 0
+            ? `${absentDays} يوم (-${absenceDeductionAmount.toFixed(2)} ج.م)`
+            : `${absentDays} يوم`;
       }
 
       return `
@@ -1440,7 +1462,7 @@ export function Payslips() {
           <td>${employee ? employee.name : item.employeeId}</td>
           <td>${item.basicSalary}</td>
           <td>${item.allowances || 0}</td>
-          <td>${extraTotal.toFixed(2)}</td>
+          <td>${extraColumnValue.toFixed(2)}</td>
           <td>${item.rewards || 0}</td>
           <td>${loanDeductions.toFixed(2)}</td>
           <td>${item.penalties || 0}</td>

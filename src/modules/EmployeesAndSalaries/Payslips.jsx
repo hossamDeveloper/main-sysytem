@@ -39,6 +39,7 @@ export function Payslips() {
     periodEnd: "",
     basicSalary: "",
     allowances: "",
+    calculationType: "monthly",
     overtimeHours: "",
     overtimeRate: "",
     penalties: "",
@@ -201,6 +202,7 @@ export function Payslips() {
       periodEnd: end,
       basicSalary: "",
       allowances: "",
+      calculationType: "monthly",
       overtimeHours: "",
       overtimeRate: "",
       lateHours: "",
@@ -391,14 +393,10 @@ export function Payslips() {
   };
 
   const calculateOvertimeRate = (basicSalary, allowances, periodStart, periodEnd) => {
-    // سعر الساعة الإضافية = (الراتب الأساسي + الحافز) ÷ عدد أيام الشهر الفعلية (حسب كل شهر) ÷ 8 ساعات
+    // سعر الساعة الإضافية = (الراتب الأساسي + الحافز) ÷ 30 ÷ 8 ساعات
     const totalMonthly =
       parseFloat(basicSalary || 0) + parseFloat(allowances || 0);
-    const startDate = new Date(periodStart || new Date());
-    const year = startDate.getFullYear();
-    const month = startDate.getMonth() + 1;
-    const daysInMonth = getDaysInMonth(year, month);
-    return totalMonthly / daysInMonth / 8;
+    return totalMonthly / 30 / 8;
   };
 
   const isFriday = (dateString) => {
@@ -441,11 +439,27 @@ export function Payslips() {
     employeeId,
     periodStart,
     periodEnd,
-    basicSalary
+    basicSalary,
+    allowances,
+    calculationType
   ) => {
-    // يجب أن نعيد الراتب الأساسي الكامل دائماً
-    // لأن خصم الغياب يتم في الخصومات (deductions) وليس هنا
-    return parseFloat(basicSalary) || 0;
+    const basicSalaryNum = parseFloat(basicSalary || 0) || 0;
+    const allowancesNum = parseFloat(allowances || 0) || 0;
+
+    // في الوضع اليومي: الراتب = الأجر اليومي × أيام الحضور
+    if (calculationType === "daily") {
+      const attendanceDays = getAttendanceDays(
+        employeeId,
+        periodStart,
+        periodEnd
+      );
+      const dailySalary = (basicSalaryNum + allowancesNum) / 30;
+      return dailySalary * attendanceDays;
+    }
+
+    // في الوضع الشهري: نعيد الراتب الأساسي كما هو
+    // ونعامل الحوافز بشكل مستقل في حساب الصافي
+    return basicSalaryNum;
   };
 
   const calculateNetPay = (
@@ -461,17 +475,25 @@ export function Payslips() {
     earlyLeaveHours,
     penalties,
     rewards,
-    insurance
+    insurance,
+    calculationType
   ) => {
-    // حساب الراتب بناءً على الحضور
+    // حساب الراتب بناءً على الحضور ونوع الحساب (شهري/يومي)
     const salaryBasedOnAttendance = calculateSalaryBasedOnAttendance(
       employeeId,
       periodStart,
       periodEnd,
-      basicSalary
+      basicSalary,
+      allowances,
+      calculationType
     );
 
-    const allow = parseFloat(allowances) || 0;
+    // في الوضع الشهري نضيف الحوافز كاملة، في الوضع اليومي تكون
+    // الحوافز مدمجة بالفعل داخل الراتب اليومي
+    const allow =
+      calculationType === "daily"
+        ? 0
+        : parseFloat(allowances) || 0;
     const overtimeHrs = parseFloat(overtimeHours) || 0;
     const overtimeRt = parseFloat(overtimeRate) || 0;
     const overtimePay = parseFloat((overtimeHrs * overtimeRt).toFixed(2));
@@ -481,8 +503,8 @@ export function Payslips() {
     const earlyLeaveHrs = parseFloat(earlyLeaveHours) || 0;
     const basicSalaryNum = parseFloat(basicSalary || 0);
     const allowancesNum = parseFloat(allowances || 0);
-    const daysInPeriod = getDaysInPeriod(periodStart, periodEnd);
-    const hourlyRate = (basicSalaryNum + allowancesNum) / daysInPeriod / 8; // سعر الساعة
+    const totalMonthlyForTime = basicSalaryNum + allowancesNum;
+    const hourlyRate = totalMonthlyForTime / 30 / 8; // سعر الساعة (أساس 30 يوم)
     const lateDeduction = parseFloat((lateHrs * hourlyRate).toFixed(2)); // خصم التأخير (مقرب)
     const earlyLeaveDeduction = parseFloat((earlyLeaveHrs * hourlyRate).toFixed(2)); // خصم الانصراف المبكر (مقرب)
     
@@ -494,15 +516,20 @@ export function Payslips() {
       0
     );
 
-    // حساب مكافأة حضور الجمعة
-    const fridayAttendanceDays = getFridayAttendanceDays(
-      employeeId,
-      periodStart,
-      periodEnd
-    );
-    const dailySalary = (basicSalaryNum + allowancesNum) / daysInPeriod;
-    const fridayBonus =
-      fridayAttendanceDays > 0 ? parseFloat((dailySalary * fridayAttendanceDays).toFixed(2)) : 0;
+    // حساب مكافأة حضور الجمعة (للوضع الشهري فقط)
+    let fridayBonus = 0;
+    if (calculationType === "monthly") {
+      const fridayAttendanceDays = getFridayAttendanceDays(
+        employeeId,
+        periodStart,
+        periodEnd
+      );
+      const dailySalary = (basicSalaryNum + allowancesNum) / 30;
+      fridayBonus =
+        fridayAttendanceDays > 0
+          ? parseFloat((dailySalary * fridayAttendanceDays).toFixed(2))
+          : 0;
+    }
 
     // الصافي = الراتب + البدلات + الساعات الإضافية + المكافآت + مكافأة الجمعة - الخصومات - الجزاءات - التأمين - خصم التأخير - خصم الانصراف المبكر
     const netPay = 
@@ -664,18 +691,19 @@ export function Payslips() {
           formData.allowances || employee.fixedAllowance || 0
         );
         const totalMonthlySalary = basicSalary + fixedAllowance;
-        const daysInPeriod = getDaysInPeriod(formData.periodStart, formData.periodEnd);
-        const dailySalary = totalMonthlySalary / daysInPeriod; // عدد الأيام الفعلية في الشهر
+        const dailySalary = totalMonthlySalary / 30;
 
-        // خصم الغياب (فقط للأيام غير الجمعة)
-        if (absentDays > 0) {
-          absentDeduction = {
-            type: "خصم غياب",
-            amount: (dailySalary * absentDays).toFixed(2),
-            source: "attendance",
-            attendanceDays: nonFridayAttendanceDays,
-            totalDays: workingDays,
-          };
+        // في الوضع الشهري فقط: خصم الغياب (فقط للأيام غير الجمعة)
+        if ((formData.calculationType || "monthly") === "monthly") {
+          if (absentDays > 0) {
+            absentDeduction = {
+              type: "خصم غياب",
+              amount: (dailySalary * absentDays).toFixed(2),
+              source: "attendance",
+              attendanceDays: nonFridayAttendanceDays,
+              totalDays: workingDays,
+            };
+          }
         }
 
         // مكافأة الحضور يوم الجمعة (يوم عمل إضافي)
@@ -733,7 +761,8 @@ export function Payslips() {
       formData.earlyLeaveHours,
       formData.penalties,
       formData.rewards,
-      formData.insurance
+      formData.insurance,
+      formData.calculationType || "monthly"
     );
     setFormData((prev) => ({ ...prev, netPay: netPay.toFixed(2) }));
   }, [
@@ -772,6 +801,7 @@ export function Payslips() {
       periodEnd: formData.periodEnd,
       basicSalary: parseFloat(formData.basicSalary) || 0,
       allowances: parseFloat(formData.allowances) || 0,
+      calculationType: formData.calculationType || "monthly",
       overtimeHours: parseFloat(formData.overtimeHours) || 0,
       overtimeRate: parseFloat(formData.overtimeRate) || 0,
       lateHours: parseFloat(formData.lateHours) || 0,
@@ -855,6 +885,7 @@ export function Payslips() {
       periodEnd: item.periodEnd,
       basicSalary: item.basicSalary,
       allowances: item.allowances || "",
+      calculationType: item.calculationType || "monthly",
       overtimeHours: item.overtimeHours || "",
       overtimeRate: item.overtimeRate || "",
       lateHours: item.lateHours || "",
@@ -938,6 +969,7 @@ export function Payslips() {
           periodEnd: item.periodEnd || item["periodEnd"],
           basicSalary: parseFloat(item.basicSalary || item["basicSalary"] || 0),
           allowances: parseFloat(item.allowances || item["allowances"] || 0),
+          calculationType: item.calculationType || item["calculationType"] || "monthly",
           overtimeHours: parseFloat(
             item.overtimeHours || item["overtimeHours"] || 0
           ),
@@ -1097,11 +1129,24 @@ export function Payslips() {
                 : ""
             }
             ${(() => {
-              const absentDays = getAbsentDays(item.employeeId, item.periodStart, item.periodEnd);
               const basicSalary = parseFloat(item.basicSalary || 0);
               const fixedAllowance = parseFloat(item.allowances || 0);
-              const daysInPeriod = getDaysInPeriod(item.periodStart, item.periodEnd);
-              const dailySalary = (basicSalary + fixedAllowance) / daysInPeriod;
+              const dailySalary = (basicSalary + fixedAllowance) / 30;
+
+              if ((item.calculationType || "monthly") === "daily") {
+                const attendanceDays = getAttendanceDays(
+                  item.employeeId,
+                  item.periodStart,
+                  item.periodEnd
+                );
+                return `<div class="metric"><strong>أيام الحضور:</strong> ${attendanceDays} يوم</div>`;
+              }
+
+              const absentDays = getAbsentDays(
+                item.employeeId,
+                item.periodStart,
+                item.periodEnd
+              );
               const absenceDeduction = absentDays > 0 ? dailySalary * absentDays : 0;
               return absentDays > 0
                 ? `<div class="metric"><strong>أيام الغياب:</strong> ${absentDays} يوم (-${absenceDeduction.toFixed(2)} ج.م)</div>`
@@ -1110,21 +1155,23 @@ export function Payslips() {
             ${(() => {
               const basicSalary = parseFloat(item.basicSalary || 0);
               const fixedAllowance = parseFloat(item.allowances || 0);
-              const daysInPeriod = getDaysInPeriod(item.periodStart, item.periodEnd);
-              const hourlyRate = (basicSalary + fixedAllowance) / daysInPeriod / 8;
+              const hourlyRate = (basicSalary + fixedAllowance) / 30 / 8;
               const lateHrs = parseFloat(item.lateHours || 0);
               const earlyLeaveHrs = parseFloat(item.earlyLeaveHours || 0);
               const lateDeduction = lateHrs * hourlyRate;
               const earlyLeaveDeduction = earlyLeaveHrs * hourlyRate;
               
-              // حساب مكافأة حضور الجمعة
+              // حساب مكافأة حضور الجمعة (فقط في الحساب الشهري)
               const fridayAttendanceDays = getFridayAttendanceDays(
                 item.employeeId,
                 item.periodStart,
                 item.periodEnd
               );
-              const dailySalary = (basicSalary + fixedAllowance) / daysInPeriod;
-              const fridayBonus = fridayAttendanceDays > 0 ? dailySalary * fridayAttendanceDays : 0;
+              const dailySalary = (basicSalary + fixedAllowance) / 30;
+              const fridayBonus =
+                (item.calculationType || "monthly") === "monthly" && fridayAttendanceDays > 0
+                  ? dailySalary * fridayAttendanceDays
+                  : 0;
               
               // حساب إجمالي السلف
               const loansTotal = item.deductions
@@ -1147,7 +1194,7 @@ export function Payslips() {
               if (item.insurance > 0) {
                 result += `<div class="metric"><strong>تأمين:</strong> -${item.insurance} ج.م</div>`;
               }
-              if (fridayAttendanceDays > 0) {
+              if (fridayBonus > 0) {
                 result += `<div class="metric"><strong>مكافأة حضور الجمعة:</strong> ${fridayAttendanceDays} يوم × ${dailySalary.toFixed(2)} = +${fridayBonus.toFixed(2)} ج.م</div>`;
               }
               return result;
@@ -1174,26 +1221,41 @@ export function Payslips() {
             const totalDeductions = loansTotal + absenceTotal;
             
             // حساب خصم التأخير والانصراف المبكر
-            const daysInPeriod = getDaysInPeriod(item.periodStart, item.periodEnd);
-            const hourlyRate = (basicSalary + allowances) / daysInPeriod / 8;
+            const hourlyRate = (basicSalary + allowances) / 30 / 8;
             const lateHrs = parseFloat(item.lateHours || 0);
             const earlyLeaveHrs = parseFloat(item.earlyLeaveHours || 0);
             const lateDeduction = parseFloat((lateHrs * hourlyRate).toFixed(2));
             const earlyLeaveDeduction = parseFloat((earlyLeaveHrs * hourlyRate).toFixed(2));
             
-            // حساب مكافأة حضور الجمعة
+            // حساب مكافأة حضور الجمعة (للوضع الشهري فقط)
             const fridayAttendanceDays = getFridayAttendanceDays(
               item.employeeId,
               item.periodStart,
               item.periodEnd
             );
-            const dailySalary = (basicSalary + allowances) / daysInPeriod;
-            const fridayBonus = fridayAttendanceDays > 0 ? parseFloat((dailySalary * fridayAttendanceDays).toFixed(2)) : 0;
-            
+            const dailySalary = (basicSalary + allowances) / 30;
+            const fridayBonus =
+              (item.calculationType || "monthly") === "monthly" &&
+              fridayAttendanceDays > 0
+                ? parseFloat((dailySalary * fridayAttendanceDays).toFixed(2))
+                : 0;
+
+            // أساس الراتب حسب نوع الحساب
+            let basePay;
+            if ((item.calculationType || "monthly") === "daily") {
+              const attendanceDays = getAttendanceDays(
+                item.employeeId,
+                item.periodStart,
+                item.periodEnd
+              );
+              basePay = dailySalary * attendanceDays;
+            } else {
+              basePay = basicSalary + allowances;
+            }
+
             // حساب الصافي بدقة
             const calculatedNetPay = 
-              basicSalary +
-              allowances +
+              basePay +
               overtimePay +
               rewards +
               fridayBonus -
@@ -1287,9 +1349,11 @@ export function Payslips() {
           item.periodStart,
           item.periodEnd
         );
-        const daysInPeriod = getDaysInPeriod(item.periodStart, item.periodEnd);
-        const fridayBonus = ((basic + allow) / daysInPeriod) * fridayDays;
-        const hourlyRate = (basic + allow) / daysInPeriod / 8;
+        const fridayBonus =
+          (item.calculationType || "monthly") === "monthly"
+            ? ((basic + allow) / 30) * fridayDays
+            : 0;
+        const hourlyRate = (basic + allow) / 30 / 8;
         const lateHrs = parseFloat(item.lateHours || 0);
         const earlyLeaveHrs = parseFloat(item.earlyLeaveHours || 0);
         const lateDeduction = lateHrs * hourlyRate;
@@ -1305,7 +1369,18 @@ export function Payslips() {
         const insurance = parseFloat(item.insurance || 0);
 
         acc.totalLoans += loanDeductions;
-        acc.totalBaseAllow += basic + allow;
+        // في الوضع اليومي، إجمالي (أساسي + بدلات) يحتسب على أساس أيام الحضور
+        if ((item.calculationType || "monthly") === "daily") {
+          const attendanceDays = getAttendanceDays(
+            item.employeeId,
+            item.periodStart,
+            item.periodEnd
+          );
+          const dailySalary = (basic + allow) / 30;
+          acc.totalBaseAllow += dailySalary * attendanceDays;
+        } else {
+          acc.totalBaseAllow += basic + allow;
+        }
         acc.totalRewards += rewards + extraNet;
         acc.totalDeductions += absenceDeductions + penalties + insurance;
         return acc;
@@ -1328,12 +1403,14 @@ export function Payslips() {
         item.periodStart,
         item.periodEnd
       );
-      const daysInPeriod = getDaysInPeriod(item.periodStart, item.periodEnd);
       const basicSalary = parseFloat(item.basicSalary || 0);
       const allowances = parseFloat(item.allowances || 0);
-      const dailySalary = (basicSalary + allowances) / daysInPeriod;
-      const hourlyRate = (basicSalary + allowances) / daysInPeriod / 8;
-      const fridayBonus = fridayAttendanceDays > 0 ? dailySalary * fridayAttendanceDays : 0;
+      const dailySalary = (basicSalary + allowances) / 30;
+      const hourlyRate = (basicSalary + allowances) / 30 / 8;
+      const fridayBonus =
+        (item.calculationType || "monthly") === "monthly" && fridayAttendanceDays > 0
+          ? dailySalary * fridayAttendanceDays
+          : 0;
       const lateHrs = parseFloat(item.lateHours || 0);
       const earlyLeaveHrs = parseFloat(item.earlyLeaveHours || 0);
       const lateDeduction = lateHrs * hourlyRate;
@@ -1345,10 +1422,20 @@ export function Payslips() {
         item.periodStart,
         item.periodEnd
       );
-      const absenceDeductionAmount = absentDays > 0
-        ? dailySalary * absentDays
-        : 0;
-      const absenceDisplay = `${absentDays} يوم${absenceDeductionAmount > 0 ? ` (-${absenceDeductionAmount.toFixed(2)} ج.م)` : ""}`;
+      let absenceDisplay;
+      if ((item.calculationType || "monthly") === "daily") {
+        const attendanceDays = getAttendanceDays(
+          item.employeeId,
+          item.periodStart,
+          item.periodEnd
+        );
+        absenceDisplay = `${attendanceDays} يوم حضور`;
+      } else {
+        const absenceDeductionAmount = absentDays > 0
+          ? dailySalary * absentDays
+          : 0;
+        absenceDisplay = `${absentDays} يوم${absenceDeductionAmount > 0 ? ` (-${absenceDeductionAmount.toFixed(2)} ج.م)` : ""}`;
+      }
 
       return `
         <tr>
@@ -1614,6 +1701,21 @@ export function Payslips() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
+                نوع طريقة الحساب
+              </label>
+              <select
+                value={formData.calculationType || "monthly"}
+                onChange={(e) =>
+                  setFormData({ ...formData, calculationType: e.target.value })
+                }
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+              >
+                <option value="monthly">شهري</option>
+                <option value="daily">يومي</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
                 الموظف <span className="text-rose-500">*</span>
               </label>
               <select
@@ -1853,12 +1955,12 @@ export function Payslips() {
                     formData.allowances || employee?.fixedAllowance || 0
                   );
                   const totalMonthlySalary = basicSalary + fixedAllowance;
-                  const daysInPeriod = getDaysInPeriod(formData.periodStart, formData.periodEnd);
-                  const dailySalary = totalMonthlySalary / daysInPeriod;
+                  const dailySalary = totalMonthlySalary / 30;
                   const absentDeductionAmount =
                     absentDays > 0 ? (dailySalary * absentDays).toFixed(2) : 0;
                   const fridayBonusAmount =
-                    fridayAttendanceDays > 0
+                    fridayAttendanceDays > 0 &&
+                    (formData.calculationType || "monthly") === "monthly"
                       ? (dailySalary * fridayAttendanceDays).toFixed(2)
                       : 0;
 
@@ -1916,22 +2018,26 @@ export function Payslips() {
                             {totalMonthlySalary.toFixed(2)} ج.م
                           </div>
                           <div>
-                            الراتب اليومي: {totalMonthlySalary.toFixed(2)} ÷ {getDaysInPeriod(formData.periodStart, formData.periodEnd)}
+                            الراتب اليومي: {totalMonthlySalary.toFixed(2)} ÷ 30
                             = {dailySalary.toFixed(2)} ج.م
                           </div>
-                          {absentDays > 0 && (
+                          {absentDays > 0 &&
+                            (formData.calculationType || "monthly") ===
+                              "monthly" && (
                             <div className="font-semibold text-rose-600">
                               خصم الغياب (أيام غير الجمعة):{" "}
                               {dailySalary.toFixed(2)} × {absentDays} ={" "}
                               {absentDeductionAmount} ج.م
                             </div>
                           )}
-                          {fridayAttendanceDays > 0 && (
-                            <div className="font-semibold text-emerald-600">
-                              مكافأة حضور الجمعة: {dailySalary.toFixed(2)} ×{" "}
-                              {fridayAttendanceDays} = {fridayBonusAmount} ج.م
-                            </div>
-                          )}
+                          {fridayAttendanceDays > 0 &&
+                            (formData.calculationType || "monthly") ===
+                              "monthly" && (
+                              <div className="font-semibold text-emerald-600">
+                                مكافأة حضور الجمعة: {dailySalary.toFixed(2)} ×{" "}
+                                {fridayAttendanceDays} = {fridayBonusAmount} ج.م
+                              </div>
+                            )}
                           {(() => {
                             const totalOvertime = getOvertimeHours(
                               formData.employeeId,
@@ -1940,13 +2046,15 @@ export function Payslips() {
                             );
                             const overtimeRate = calculateOvertimeRate(
                               basicSalary,
-                              fixedAllowance
+                              fixedAllowance,
+                              formData.periodStart,
+                              formData.periodEnd
                             );
                             if (totalOvertime > 0) {
                               return (
                                 <div className="font-semibold text-emerald-600">
                                   الساعات الإضافية: {totalOvertime.toFixed(1)}{" "}
-                                  ساعة × {overtimeRate.toFixed(2)} (الراتب ÷ {getDaysInPeriod(formData.periodStart, formData.periodEnd)}
+                                  ساعة × {overtimeRate.toFixed(2)} (الراتب ÷ 30
                                   ÷ 8) ={" "}
                                   {(totalOvertime * overtimeRate).toFixed(2)}{" "}
                                   ج.م
@@ -2054,8 +2162,7 @@ export function Payslips() {
                 {(() => {
                   const basicSalary = parseFloat(formData.basicSalary || 0);
                   const fixedAllowance = parseFloat(formData.allowances || 0);
-                  const daysInPeriod = getDaysInPeriod(formData.periodStart, formData.periodEnd);
-                  const hourlyRate = (basicSalary + fixedAllowance) / daysInPeriod / 8;
+                  const hourlyRate = (basicSalary + fixedAllowance) / 30 / 8;
                   const lateHrs = parseFloat(formData.lateHours || 0);
                   const earlyLeaveHrs = parseFloat(formData.earlyLeaveHours || 0);
                   const lateDeduction = lateHrs * hourlyRate;
@@ -2102,10 +2209,10 @@ export function Payslips() {
                   );
                   const basicSalary = parseFloat(formData.basicSalary || 0);
                   const fixedAllowance = parseFloat(formData.allowances || 0);
-                  const daysInPeriod = getDaysInPeriod(formData.periodStart, formData.periodEnd);
-                  const dailySalary = (basicSalary + fixedAllowance) / daysInPeriod;
+                  const dailySalary = (basicSalary + fixedAllowance) / 30;
                   const fridayBonus =
-                    fridayAttendanceDays > 0
+                    fridayAttendanceDays > 0 &&
+                    (formData.calculationType || "monthly") === "monthly"
                       ? dailySalary * fridayAttendanceDays
                       : 0;
                   if (fridayBonus > 0) {
@@ -2236,8 +2343,7 @@ export function Payslips() {
               {(() => {
                 const basicSalary = parseFloat(viewingItem.basicSalary || 0);
                 const fixedAllowance = parseFloat(viewingItem.allowances || 0);
-                const daysInPeriod = getDaysInPeriod(viewingItem.periodStart, viewingItem.periodEnd);
-                const hourlyRate = (basicSalary + fixedAllowance) / daysInPeriod / 8;
+                const hourlyRate = (basicSalary + fixedAllowance) / 30 / 8;
                 const lateHrs = parseFloat(viewingItem.lateHours || 0);
                 const earlyLeaveHrs = parseFloat(viewingItem.earlyLeaveHours || 0);
                 const lateDeduction = lateHrs * hourlyRate;

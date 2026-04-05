@@ -1349,16 +1349,17 @@ export function Payslips() {
           item.periodStart,
           item.periodEnd
         );
-        const fridayBonus =
-          (item.calculationType || "monthly") === "monthly"
-            ? ((basic + allow) / 30) * fridayDays
-            : 0;
+        const dailySalaryTotal = (basic + allow) / 30;
+        const fridayExtraAmount = dailySalaryTotal * fridayDays;
         const hourlyRate = (basic + allow) / 30 / 8;
         const lateHrs = parseFloat(item.lateHours || 0);
         const earlyLeaveHrs = parseFloat(item.earlyLeaveHours || 0);
         const lateDeduction = lateHrs * hourlyRate;
         const earlyLeaveDeduction = earlyLeaveHrs * hourlyRate;
-        const extraNet = overtimePay + fridayBonus - lateDeduction - earlyLeaveDeduction;
+        const isDailyCalc = (item.calculationType || "monthly") === "daily";
+        const extraNet = isDailyCalc
+          ? 1
+          : fridayExtraAmount + overtimePay - lateDeduction - earlyLeaveDeduction;
         const loanDeductions = item.deductions
           .filter((d) => d.source === "erp_loans")
           .reduce((sum, d) => sum + parseFloat(d.amount || 0), 0);
@@ -1415,16 +1416,16 @@ export function Payslips() {
       const allowances = parseFloat(item.allowances || 0);
       const dailySalary = (basicSalary + allowances) / 30;
       const hourlyRate = (basicSalary + allowances) / 30 / 8;
-      const fridayBonus =
-        (item.calculationType || "monthly") === "monthly" && fridayAttendanceDays > 0
-          ? dailySalary * fridayAttendanceDays
-          : 0;
+      const fridayExtraAmount = dailySalary * fridayAttendanceDays;
       const lateHrs = parseFloat(item.lateHours || 0);
       const earlyLeaveHrs = parseFloat(item.earlyLeaveHours || 0);
       const lateDeduction = lateHrs * hourlyRate;
       const earlyLeaveDeduction = earlyLeaveHrs * hourlyRate;
-      // عمود الإضافي = الساعات الإضافية فقط بعد خصم التأخير والانصراف المبكر
-      const extraColumnValue = overtimePay - lateDeduction - earlyLeaveDeduction;
+      // عمود الإضافي = قيمة أيام الجمعة المحضورة + الساعات الإضافية بعد خصم التأخير والانصراف المبكر (لا يُعرض في الوضع اليومي/الفردي)
+      const isDailyRow = (item.calculationType || "monthly") === "daily";
+      const extraColumnValue = isDailyRow
+        ? null
+        : fridayExtraAmount + overtimePay - lateDeduction - earlyLeaveDeduction;
 
       const absentDays = getAbsentDays(
         item.employeeId,
@@ -1462,7 +1463,7 @@ export function Payslips() {
           <td>${employee ? employee.name : item.employeeId}</td>
           <td>${item.basicSalary}</td>
           <td>${item.allowances || 0}</td>
-          <td>${extraColumnValue.toFixed(2)}</td>
+          <td>${extraColumnValue == null ? "" : extraColumnValue.toFixed(2)}</td>
           <td>${item.rewards || 0}</td>
           <td>${loanDeductions.toFixed(2)}</td>
           <td>${item.penalties || 0}</td>
@@ -2388,6 +2389,36 @@ export function Payslips() {
                       </div>
                     )}
                   </>
+                );
+              })()}
+              {(() => {
+                const fridayAttendanceDays = getFridayAttendanceDays(
+                  viewingItem.employeeId,
+                  viewingItem.periodStart,
+                  viewingItem.periodEnd
+                );
+                if (fridayAttendanceDays <= 0) return null;
+                const basicSalary = parseFloat(viewingItem.basicSalary || 0);
+                const fixedAllowance = parseFloat(viewingItem.allowances || 0);
+                const dailySalary = (basicSalary + fixedAllowance) / 30;
+                const fridayAmount = parseFloat(
+                  (fridayAttendanceDays * dailySalary).toFixed(2)
+                );
+                const isMonthly =
+                  (viewingItem.calculationType || "monthly") === "monthly";
+                return (
+                  <div>
+                    <p className="text-sm text-gray-600">حضور أيام الجمعة</p>
+                    <p className="font-semibold text-emerald-600">
+                      {fridayAttendanceDays} يوم × {dailySalary.toFixed(2)} ج.م/يوم ={" "}
+                      {fridayAmount.toFixed(2)} ج.م
+                    </p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {isMonthly
+                        ? "تُحسب كمكافأة حضور الجمعة وتُضاف في الصافي."
+                        : "قيمة أيام الجمعة ضمن الراتب اليومي (أجر يوم × أيام الحضور)."}
+                    </p>
+                  </div>
                 );
               })()}
               {viewingItem.rewards > 0 && (

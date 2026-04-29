@@ -273,6 +273,40 @@ export function Payslips() {
     return new Date(year, month, 0).getDate();
   };
 
+  // توحيد التعامل مع التواريخ بصيغة "YYYY-MM-DD" بدون أي تأثير لتوقيت الجهاز.
+  // لتفادي مشكلة اختلاف/انحراف اليوم عند استخدام new Date('YYYY-MM-DD') أو toISOString().
+  const parseYmdToUtcMs = (dateLike) => {
+    if (!dateLike) return NaN;
+    if (dateLike instanceof Date) {
+      return Date.UTC(
+        dateLike.getFullYear(),
+        dateLike.getMonth(),
+        dateLike.getDate()
+      );
+    }
+    const str = String(dateLike).trim();
+    const m = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) {
+      const y = Number(m[1]);
+      const mo = Number(m[2]) - 1;
+      const d = Number(m[3]);
+      return Date.UTC(y, mo, d);
+    }
+    const dt = new Date(dateLike);
+    if (Number.isNaN(dt.getTime())) return NaN;
+    return Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate());
+  };
+
+  const formatYmdFromUtcMs = (ms) => {
+    const dt = new Date(ms);
+    const y = dt.getUTCFullYear();
+    const m = String(dt.getUTCMonth() + 1).padStart(2, "0");
+    const d = String(dt.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  };
+
+  const MS_PER_DAY = 1000 * 60 * 60 * 24;
+
   const getAttendanceDays = (employeeId, periodStart, periodEnd) => {
     return attendanceData.filter(
       (record) =>
@@ -284,8 +318,9 @@ export function Payslips() {
   };
 
   const getAbsentDays = (employeeId, periodStart, periodEnd) => {
-    const totalDays =
-      (new Date(periodEnd) - new Date(periodStart)) / (1000 * 60 * 60 * 24) + 1;
+    const startMs = parseYmdToUtcMs(periodStart);
+    const endMs = parseYmdToUtcMs(periodEnd);
+    const totalDays = Math.floor((endMs - startMs) / MS_PER_DAY) + 1;
     const fridaysCount = getFridaysInPeriod(periodStart, periodEnd).length;
     const totalAttendanceDays = getAttendanceDays(employeeId, periodStart, periodEnd);
     const fridayAttendanceDays = getFridayAttendanceDays(employeeId, periodStart, periodEnd);
@@ -385,11 +420,9 @@ export function Payslips() {
 
   const getDaysInPeriod = (periodStart, periodEnd) => {
     if (!periodStart || !periodEnd) return 30; // افتراضي 30 يوم
-    const start = new Date(periodStart);
-    const end = new Date(periodEnd);
-    const diffTime = Math.abs(end - start);
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1; // +1 لتضمين اليوم الأول والأخير
-    return diffDays;
+    const startMs = parseYmdToUtcMs(periodStart);
+    const endMs = parseYmdToUtcMs(periodEnd);
+    return Math.floor((endMs - startMs) / MS_PER_DAY) + 1; // +1 لتضمين اليوم الأول والأخير
   };
 
   const calculateOvertimeRate = (basicSalary, allowances, periodStart, periodEnd) => {
@@ -400,23 +433,23 @@ export function Payslips() {
   };
 
   const isFriday = (dateString) => {
-    const date = new Date(dateString);
-    return date.getDay() === 5; // 5 = Friday
+    const ms = parseYmdToUtcMs(dateString);
+    if (Number.isNaN(ms)) return false;
+    return new Date(ms).getUTCDay() === 5; // 5 = Friday
   };
 
   const getFridaysInPeriod = (periodStart, periodEnd) => {
     const fridays = [];
-    const start = new Date(periodStart);
-    const end = new Date(periodEnd);
-    const current = new Date(start);
+    const startMs = parseYmdToUtcMs(periodStart);
+    const endMs = parseYmdToUtcMs(periodEnd);
+    if (Number.isNaN(startMs) || Number.isNaN(endMs)) return fridays;
 
-    while (current <= end) {
-      if (current.getDay() === 5) {
-        // Friday
-        const dateStr = current.toISOString().split("T")[0];
-        fridays.push(dateStr);
+    // نتحرك يومًا بيوم باستخدام UTC midnights لتفادي أي انحراف بسبب توقيت الجهاز.
+    for (let ms = startMs; ms <= endMs; ms += MS_PER_DAY) {
+      const d = new Date(ms);
+      if (d.getUTCDay() === 5) {
+        fridays.push(formatYmdFromUtcMs(ms));
       }
-      current.setDate(current.getDate() + 1);
     }
 
     return fridays;

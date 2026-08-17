@@ -48,7 +48,6 @@ export function PurchaseOrders() {
     custodyAmount: 0,
     custodyRemainingAmount: 0,
     deliveryDate: '',
-    paymentTerms: '',
     status: 'Open',
     items: [],
     notes: '',
@@ -110,9 +109,7 @@ export function PurchaseOrders() {
 
   const validateForm = () => {
     const errors = {};
-    if (!formData.supplierId) errors.supplierId = 'المورد مطلوب';
     if (!formData.deliveryDate) errors.deliveryDate = 'تاريخ التسليم مطلوب';
-    if (!formData.paymentTerms) errors.paymentTerms = 'شروط الدفع مطلوبة';
     if (formData.items.length === 0) errors.items = 'يجب إضافة عنصر واحد على الأقل';
     
     // Check if total amount exceeds custody remaining amount (فقط إذا تم اختيار عهدة)
@@ -145,7 +142,6 @@ export function PurchaseOrders() {
       custodyAmount: 0,
       custodyRemainingAmount: 0,
       deliveryDate: '',
-      paymentTerms: '',
       status: 'Open',
       items: [],
       notes: '',
@@ -218,21 +214,27 @@ export function PurchaseOrders() {
       setNewItem({ itemName: '', quantity: '', price: '' });
       return;
     }
-    
+
     const product = productsData?.data?.find((p) => p.id === productId);
     if (!product) return;
-    
-    // Find supplier product price if supplier is selected
+
     let productPrice = '';
     if (formData.supplierId && supplierProductsData?.data) {
       const supplierProduct = supplierProductsData.data.find(
-        (sp) => sp.productId === productId
+        (sp) => String(sp.productId ?? '') === String(productId)
       );
       if (supplierProduct) {
         productPrice = supplierProduct.price || '';
       }
     }
-    
+
+    if (!productPrice && productMinPriceMap) {
+      const minPrice = productMinPriceMap.get(String(productId));
+      if (minPrice !== undefined && minPrice !== null) {
+        productPrice = String(minPrice);
+      }
+    }
+
     setSelectedProductId(productId);
     setNewItem({
       itemName: product.name || '',
@@ -241,13 +243,50 @@ export function PurchaseOrders() {
     });
   };
 
+  const allSupplierProducts = useMemo(() => {
+    try {
+      return JSON.parse(localStorage.getItem('purchasing_supplierProducts') || '[]');
+    } catch {
+      return [];
+    }
+  }, [productsData, suppliersData]);
+
+  const productMinPriceMap = useMemo(() => {
+    const priceMap = new Map();
+    (allSupplierProducts || []).forEach((entry) => {
+      const productId = String(entry.productId ?? '');
+      const price = parseFloat(entry.price) || 0;
+      if (!productId) return;
+      const currentMin = priceMap.get(productId);
+      if (currentMin === undefined || price < currentMin) {
+        priceMap.set(productId, price);
+      }
+    });
+    return priceMap;
+  }, [allSupplierProducts]);
+
   const availableProductsForSupplier = useMemo(() => {
     const products = productsData?.data || [];
     const sp = supplierProductsData?.data || [];
-    if (!formData.supplierId) return [];
-    const allowed = new Set(sp.map((x) => String(x.productId ?? '')));
-    return products.filter((p) => allowed.has(String(p.id ?? '')));
-  }, [formData.supplierId, productsData?.data, supplierProductsData?.data]);
+    const supplierProductMap = new Map(
+      sp.map((entry) => [String(entry.productId ?? ''), parseFloat(entry.price) || 0])
+    );
+    const fallbackMap = productMinPriceMap;
+
+    if (!formData.supplierId) {
+      return products.map((product) => ({
+        ...product,
+        supplierPrice: fallbackMap.get(String(product.id ?? '')) || 0,
+      }));
+    }
+
+    return products
+      .filter((p) => supplierProductMap.has(String(p.id ?? '')))
+      .map((product) => ({
+        ...product,
+        supplierPrice: supplierProductMap.get(String(product.id ?? '')),
+      }));
+  }, [formData.supplierId, productMinPriceMap, productsData?.data, supplierProductsData?.data]);
 
   const handleAddItem = () => {
     if (itemInputMode === 'product') {
@@ -265,7 +304,7 @@ export function PurchaseOrders() {
             id: Date.now(),
             productId: selectedProductId,
             itemName: product?.name || newItem.itemName,
-            quantity: parseInt(newItem.quantity),
+            quantity: parseFloat(newItem.quantity) || 0,
             price: parseFloat(newItem.price),
           },
         ],
@@ -285,7 +324,7 @@ export function PurchaseOrders() {
           {
             id: Date.now(),
             itemName: newItem.itemName,
-            quantity: parseInt(newItem.quantity),
+            quantity: parseFloat(newItem.quantity) || 0,
             price: parseFloat(newItem.price),
           },
         ],
@@ -323,7 +362,6 @@ export function PurchaseOrders() {
       custodyAmount: parseFloat(po.custodyAmount) || custody?.amount || 0,
       custodyRemainingAmount: custody?.remainingAmount ?? parseFloat(po.custodyRemainingAmount) ?? 0,
       deliveryDate: po.deliveryDate || '',
-      paymentTerms: po.paymentTerms || '',
       status: po.status || 'Open',
       items: po.items || [],
       notes: po.notes || '',
@@ -407,9 +445,10 @@ export function PurchaseOrders() {
             <div class="box"><span class="label">المورد:</span> ${po.supplierName || '-'}</div>
             <div class="box"><span class="label">العهدة:</span> ${po.custodyNumber || '-'}</div>
             <div class="box"><span class="label">الموظف المسؤول:</span> ${
-              viewingPO.responsibleEmployeeId || '-'
+              (po.responsibleEmployeeName || po.responsibleEmployeeId || '-') +
+              (po.responsibleEmployeeName && po.responsibleEmployeeId ? ` (${po.responsibleEmployeeId})` : '')
             }</div>
-            <div class="box"><span class="label">تاريخ التسليم:</span> ${po.deliveryDate || '-'}</div>
+            <div class="box"><span class="label">التاريخ:</span> ${po.deliveryDate || '-'}</div>
             <div class="box"><span class="label">شروط الدفع:</span> ${po.paymentTerms || '-'}</div>
           </div>
 
@@ -723,7 +762,7 @@ export function PurchaseOrders() {
       label: 'الإجمالي',
       render: (value) => `${parseFloat(value || 0).toFixed(2)} ج.م`,
     },
-    { key: 'deliveryDate', label: 'تاريخ التسليم' },
+    { key: 'deliveryDate', label: 'التاريخ' },
     {
       key: 'status',
       label: 'الحالة',
@@ -1003,16 +1042,14 @@ export function PurchaseOrders() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                المورد <span className="text-red-500">*</span>
+                المورد
               </label>
               <select
                 value={formData.supplierId}
                 onChange={(e) => handleSupplierChange(e.target.value)}
-                className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-sky-500 ${
-                  formErrors.supplierId ? 'border-red-500' : 'border-gray-300'
-                }`}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-sky-500"
               >
-                <option value="">اختر مورد</option>
+                <option value="">بدون مورد</option>
                 {(suppliersData?.data || [])
                   .filter((s) => s.status === 'Active')
                   .map((supplier) => (
@@ -1021,9 +1058,6 @@ export function PurchaseOrders() {
                     </option>
                   ))}
               </select>
-              {formErrors.supplierId && (
-                <p className="mt-1 text-sm text-red-600">{formErrors.supplierId}</p>
-              )}
             </div>
 
             <div>
@@ -1038,18 +1072,27 @@ export function PurchaseOrders() {
                 }`}
               >
                 <option value="">اختر عهدة</option>
-                {openCustodiesWithBalance.map((custody) => (
-                  <option key={custody.id} value={custody.id}>
-                    {custody.custodyNumber} — {custody.employeeName} — المتبقي:{' '}
-                    {custody.remainingAmount.toFixed(2)} ج.م
-                  </option>
-                ))}
+                {openCustodiesWithBalance.map((custody) => {
+                  const employeeName = custody.employeeName || custody.employeeId || 'غير محدد';
+                  const employeeCode = custody.employeeId ? `(${custody.employeeId})` : '';
+                  return (
+                    <option key={custody.id} value={custody.id}>
+                      {custody.custodyNumber} — {employeeName}{employeeCode} — المبلغ:{' '}
+                      {custody.remainingAmount.toFixed(2)} ج.م
+                    </option>
+                  );
+                })}
               </select>
               {/* لم نعد نلزم باختيار عهدة عند إنشاء أمر الشراء */}
               {formData.custodyId && (
                 <div className="mt-2 p-3 bg-blue-50 rounded-lg text-sm">
                   <p className="text-gray-700">
-                    <span className="font-medium">الموظف:</span> {formData.responsibleEmployeeName}
+                    <span className="font-medium">كود العهدة:</span> {formData.custodyNumber || '—'}
+                  </p>
+                  <p className="text-gray-700">
+                    <span className="font-medium">صاحب العهدة:</span>{' '}
+                    {formData.responsibleEmployeeName || formData.responsibleEmployeeId || '—'}
+                    {formData.responsibleEmployeeId ? ` (${formData.responsibleEmployeeId})` : ''}
                   </p>
                   <p className="text-gray-700">
                     <span className="font-medium">إجمالي العهدة:</span>{' '}
@@ -1065,7 +1108,7 @@ export function PurchaseOrders() {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                تاريخ التسليم <span className="text-red-500">*</span>
+                التاريخ
               </label>
               <input
                 type="date"
@@ -1077,24 +1120,6 @@ export function PurchaseOrders() {
               />
               {formErrors.deliveryDate && (
                 <p className="mt-1 text-sm text-red-600">{formErrors.deliveryDate}</p>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                شروط الدفع <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                value={formData.paymentTerms}
-                onChange={(e) => setFormData({ ...formData, paymentTerms: e.target.value })}
-                placeholder="مثال: 30 يوم، نقدي، شيك..."
-                className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-sky-500 ${
-                  formErrors.paymentTerms ? 'border-red-500' : 'border-gray-300'
-                }`}
-              />
-              {formErrors.paymentTerms && (
-                <p className="mt-1 text-sm text-red-600">{formErrors.paymentTerms}</p>
               )}
             </div>
 
@@ -1163,18 +1188,20 @@ export function PurchaseOrders() {
                   value={selectedProductId}
                   onChange={(e) => handleProductSelect(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-sky-500"
-                  disabled={!formData.supplierId}
                 >
                   <option value="">اختر منتج</option>
                   {(availableProductsForSupplier || []).map((product) => (
                     <option key={product.id} value={product.id}>
                       {product.name} {product.category ? `(${product.category})` : ''}
+                      {typeof product.supplierPrice === 'number' && !Number.isNaN(product.supplierPrice) && product.supplierPrice > 0
+                        ? ` — أقل سعر: ${product.supplierPrice.toFixed(2)} ج.م`
+                        : ''}
                     </option>
                   ))}
                 </select>
                 {!formData.supplierId && (
-                  <div className="text-sm text-yellow-600 bg-yellow-50 p-2 rounded">
-                    يرجى اختيار مورد أولاً لعرض أسعار المنتجات
+                  <div className="text-sm text-blue-700 bg-blue-50 p-2 rounded">
+                    يتم عرض أقل سعر بين الموردين المسجلين في النظام لكل منتج.
                   </div>
                 )}
                 {formData.supplierId && (supplierProductsData?.data || []).length === 0 && (
@@ -1182,7 +1209,7 @@ export function PurchaseOrders() {
                     هذا المورد لا يوجد لديه منتجات مرتبطة. أضِف منتجات للمورد من صفحة الموردين.
                   </div>
                 )}
-                {formData.supplierId && selectedProductId && (
+                {selectedProductId && (
                   <div className="grid grid-cols-4 gap-2">
                     <input
                       type="text"
@@ -1193,6 +1220,7 @@ export function PurchaseOrders() {
                     />
                     <input
                       type="number"
+                      step="0.01"
                       placeholder="الكمية"
                       value={newItem.quantity}
                       onChange={(e) => setNewItem({ ...newItem, quantity: e.target.value })}
@@ -1227,6 +1255,7 @@ export function PurchaseOrders() {
                 />
                 <input
                   type="number"
+                  step="0.01"
                   placeholder="الكمية"
                   value={newItem.quantity}
                   onChange={(e) => setNewItem({ ...newItem, quantity: e.target.value })}
@@ -1269,7 +1298,7 @@ export function PurchaseOrders() {
                     {formData.items.map((item) => (
                       <tr key={item.id} className="border-b">
                         <td className="py-2">{item.itemName}</td>
-                        <td className="py-2">{item.quantity}</td>
+                        <td className="py-2">{parseFloat(item.quantity || 0).toFixed(2)}</td>
                         <td className="py-2">{item.price} ج.م</td>
                         <td className="py-2">
                           {((item.price || 0) * (item.quantity || 0)).toFixed(2)} ج.م
@@ -1352,17 +1381,20 @@ export function PurchaseOrders() {
               <div>
                 <label className="text-sm font-medium text-gray-600">الموظف المسؤول</label>
                 <p className="text-gray-800">
-                  {viewingPO.responsibleEmployeeId || '-'}
+                  {viewingPO.responsibleEmployeeName || viewingPO.responsibleEmployeeId || '-'}
+                  {viewingPO.responsibleEmployeeId && viewingPO.responsibleEmployeeName
+                    ? ` (${viewingPO.responsibleEmployeeId})`
+                    : ''}
                 </p>
               </div>
               <div>
-                <label className="text-sm font-medium text-gray-600">تاريخ التسليم</label>
+                <label className="text-sm font-medium text-gray-600">التاريخ </label>
                 <p className="text-gray-800">{viewingPO.deliveryDate}</p>
               </div>
-              <div>
+              {/* <div>
                 <label className="text-sm font-medium text-gray-600">شروط الدفع</label>
                 <p className="text-gray-800">{viewingPO.paymentTerms}</p>
-              </div>
+              </div> */}
               <div>
                 <label className="text-sm font-medium text-gray-600">الحالة</label>
                 <p>{getStatusBadge(viewingPO.status)}</p>
@@ -1384,7 +1416,7 @@ export function PurchaseOrders() {
                   {viewingPO.items?.map((item, idx) => (
                     <tr key={item.id || idx} className="border-t">
                       <td className="px-3 py-2">{item.itemName}</td>
-                      <td className="px-3 py-2">{item.quantity}</td>
+                      <td className="px-3 py-2">{parseFloat(item.quantity || 0).toFixed(2)}</td>
                       <td className="px-3 py-2">{item.price} ج.م</td>
                       <td className="px-3 py-2">
                         {((item.price || 0) * (item.quantity || 0)).toFixed(2)} ج.م

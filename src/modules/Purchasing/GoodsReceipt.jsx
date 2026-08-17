@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { useERPStorage } from '../../hooks/useERPStorage';
 import {
   useGoodsReceipts,
   usePurchaseOrders,
@@ -64,6 +65,7 @@ export function GoodsReceipt() {
     search,
     ...dateFilters,
   });
+  const { data: employees } = useERPStorage('employees');
   const { data: allGRNsData } = useGoodsReceipts({ limit: 10000 }); // Get all GRNs for calculations
   const { data: posData } = usePurchaseOrders({ limit: 1000 });
   const { data: custodiesData } = useCustodies({ limit: 1000 });
@@ -104,6 +106,26 @@ export function GoodsReceipt() {
   }, [selectedCustody]);
 
   const [formErrors, setFormErrors] = useState({});
+
+  const getCustodyEmployeeDisplay = (custody) => {
+    if (!custody) return '—';
+    if (custody.employeeName) return custody.employeeName;
+    if (custody.employeeId && employees?.length) {
+      const employee = employees.find((e) => String(e.id) === String(custody.employeeId));
+      if (employee?.name) return employee.name;
+    }
+    return custody.employeeId || '—';
+  };
+
+  const getDeductionEmployeeDisplay = (deduction) => {
+    if (!deduction) return '—';
+    if (deduction.employeeName) return deduction.employeeName;
+    if (deduction.employeeId && employees?.length) {
+      const employee = employees.find((e) => String(e.id) === String(deduction.employeeId));
+      if (employee?.name) return employee.name;
+    }
+    return deduction.employeeId || '—';
+  };
 
   const showToast = (message, type = 'success') => {
     setToast({ message, type });
@@ -172,14 +194,14 @@ export function GoodsReceipt() {
           // Calculate total received from other GRNs (excluding current if editing)
           let receivedFromOtherGRNs = 0;
           otherGRNs.forEach((grn) => {
-            const grnItem = grn.items?.find((gi) => gi.itemId === item.id);
+            const grnItem = grn.items?.find((gi) => gi.itemId === item.productId || gi.itemId === item.id);
             if (grnItem) {
               receivedFromOtherGRNs += grnItem.receivedQuantity || 0;
             }
           });
           
           // If editing, get current GRN's received quantity for this item
-          const currentGRNItem = currentGRNItems.find((gi) => gi.itemId === item.id);
+          const currentGRNItem = currentGRNItems.find((gi) => gi.itemId === item.productId || gi.itemId === item.id);
           const currentReceivedInThisGRN = currentGRNItem?.receivedQuantity || 0;
           
           // Calculate remaining: ordered - received from other GRNs
@@ -188,11 +210,12 @@ export function GoodsReceipt() {
           
           return {
             id: item.id || Date.now() + idx,
-            itemId: item.id || Date.now() + idx,
+            itemId: item.productId || item.id || Date.now() + idx, // Use productId if available, fallback to item.id
             itemName: item.itemName,
             orderedQuantity: orderedQty,
             receivedQuantity: editingGRN ? currentReceivedInThisGRN : 0,
             remainingQuantity: Math.max(0, remaining),
+            maxAllowedQuantity: Math.max(0, remaining),
           };
         }),
       });
@@ -202,29 +225,24 @@ export function GoodsReceipt() {
   const handleQuantityChange = (itemId, quantity) => {
     const item = formData.items.find((i) => i.id === itemId);
     if (item) {
-      // Parse the input value
       let receivedQty = 0;
       if (quantity !== '' && quantity !== null && quantity !== undefined) {
-        const parsed = parseInt(String(quantity).trim(), 10);
+        const parsed = parseFloat(String(quantity).trim());
         receivedQty = isNaN(parsed) ? 0 : Math.max(0, parsed);
       }
-      
-      // Ensure received quantity doesn't exceed remaining quantity
-      const maxAllowed = item.remainingQuantity || item.orderedQuantity || 0;
-      if (receivedQty > maxAllowed) {
-        receivedQty = maxAllowed;
-      }
-      
-      // Calculate new remaining: original remaining minus the newly entered quantity
-      const newRemaining = maxAllowed - receivedQty;
+
+      const maxAllowed = item.maxAllowedQuantity ?? item.orderedQuantity ?? 0;
+      const safeQty = Math.min(receivedQty, maxAllowed);
+      const newRemaining = Math.max(0, maxAllowed - safeQty);
+
       setFormData({
         ...formData,
         items: formData.items.map((i) =>
           i.id === itemId
-            ? { 
-                ...i, 
-                receivedQuantity: receivedQty, 
-                remainingQuantity: Math.max(0, newRemaining) 
+            ? {
+                ...i,
+                receivedQuantity: safeQty,
+                remainingQuantity: newRemaining,
               }
             : i
         ),
@@ -261,14 +279,14 @@ export function GoodsReceipt() {
         // Calculate total received from other GRNs
         let receivedFromOtherGRNs = 0;
         otherGRNs.forEach((otherGRN) => {
-          const grnItem = otherGRN.items?.find((gi) => gi.itemId === item.id);
+          const grnItem = otherGRN.items?.find((gi) => gi.itemId === item.productId || gi.itemId === item.id);
           if (grnItem) {
             receivedFromOtherGRNs += grnItem.receivedQuantity || 0;
           }
         });
         
         // Get current GRN's received quantity for this item
-        const currentGRNItem = currentGRNItems.find((gi) => gi.itemId === item.id);
+        const currentGRNItem = currentGRNItems.find((gi) => gi.itemId === item.productId || gi.itemId === item.id);
         const currentReceivedInThisGRN = currentGRNItem?.receivedQuantity || 0;
         
         // Calculate remaining: ordered - received from other GRNs
@@ -276,11 +294,12 @@ export function GoodsReceipt() {
         
         return {
           id: item.id || Date.now() + idx,
-          itemId: item.id || Date.now() + idx,
+          itemId: item.productId || item.id || Date.now() + idx, // Use productId if available, fallback to item.id
           itemName: item.itemName,
           orderedQuantity: orderedQty,
           receivedQuantity: currentReceivedInThisGRN,
           remainingQuantity: Math.max(0, remaining),
+          maxAllowedQuantity: Math.max(0, remaining),
         };
       }),
       notes: grn.notes || '',
@@ -844,7 +863,7 @@ export function GoodsReceipt() {
                 </div>
                 <div>
                   <span className="text-gray-600">الموظف:</span>{' '}
-                  <span className="font-medium">{selectedCustody.employeeName}</span>
+                  <span className="font-medium">{getCustodyEmployeeDisplay(selectedCustody)}</span>
                 </div>
                 <div>
                   <span className="text-gray-600">إجمالي العهدة:</span>{' '}
@@ -889,6 +908,7 @@ export function GoodsReceipt() {
                     <thead>
                       <tr className="border-b">
                         <th className="text-right py-2">اسم العنصر</th>
+                        <th className="text-right py-2">العدد</th>
                         <th className="text-right py-2">المطلوب</th>
                         <th className="text-right py-2">السعر</th>
                         <th className="text-right py-2">المستلم</th>
@@ -902,14 +922,15 @@ export function GoodsReceipt() {
                         return (
                           <tr key={item.id} className="border-b">
                             <td className="py-2">{item.itemName}</td>
-                            <td className="py-2">{item.orderedQuantity}</td>
+                            <td className="py-2">{item.orderedQuantity ?? item.quantity ?? 0}</td>
+                            <td className="py-2">{item.orderedQuantity ?? item.quantity ?? 0}</td>
                             <td className="py-2">{poItem?.price?.toFixed(2) || 0} ج.م</td>
                             <td className="py-2">
                               <input
                                 type="number"
                                 min="0"
-                                max={item.remainingQuantity || item.orderedQuantity || 0}
-                                step="1"
+                                max={item.maxAllowedQuantity ?? item.orderedQuantity ?? 0}
+                                step="0.01"
                                 value={item.receivedQuantity || 0}
                                 onChange={(e) => {
                                   handleQuantityChange(item.id, e.target.value);
@@ -1026,7 +1047,12 @@ export function GoodsReceipt() {
                   </div>
                   <div>
                     <span className="text-gray-600">الموظف:</span>{' '}
-                    <span className="font-medium">{viewingGRN.custodyDeduction.responsibleEmployeeId}</span>
+                    <span className="font-medium">
+                      {getDeductionEmployeeDisplay(viewingGRN.custodyDeduction)}
+                      {viewingGRN.custodyDeduction?.employeeId && viewingGRN.custodyDeduction?.employeeName
+                        ? ` (${viewingGRN.custodyDeduction.employeeId})`
+                        : ''}
+                    </span>
                   </div>
                   <div>
                     <span className="text-gray-600">المبلغ المخصوم:</span>{' '}
@@ -1050,6 +1076,7 @@ export function GoodsReceipt() {
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-3 py-2 text-right">اسم العنصر</th>
+                    <th className="px-3 py-2 text-right">العدد</th>
                     <th className="px-3 py-2 text-right">الكمية المستلمة</th>
                     <th className="px-3 py-2 text-right">السعر</th>
                     <th className="px-3 py-2 text-right">الإجمالي</th>
@@ -1059,6 +1086,7 @@ export function GoodsReceipt() {
                   {viewingGRN.items?.map((item, idx) => (
                     <tr key={idx} className="border-t">
                       <td className="px-3 py-2">{item.itemName}</td>
+                      <td className="px-3 py-2">{item.orderedQuantity ?? item.quantity ?? '-'}</td>
                       <td className="px-3 py-2">{item.receivedQuantity}</td>
                       <td className="px-3 py-2">{item.price ? `${parseFloat(item.price).toFixed(2)} ج.م` : '-'}</td>
                       <td className="px-3 py-2 font-medium">

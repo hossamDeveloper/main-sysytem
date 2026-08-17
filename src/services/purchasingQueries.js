@@ -179,7 +179,9 @@ export const useCreateGoodsReceipt = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['goodsReceipts'] });
       queryClient.invalidateQueries({ queryKey: ['purchaseOrders'] });
-      queryClient.invalidateQueries({ queryKey: ['custodies'] }); // Invalidate custodies to reflect deduction
+      queryClient.invalidateQueries({ queryKey: ['custodies'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] }); // Invalidate all products queries regardless of params
+      queryClient.refetchQueries({ queryKey: ['products'] }); // Aggressively refetch immediately
       queryClient.invalidateQueries({ queryKey: ['dashboardStats'] });
     },
   });
@@ -193,6 +195,8 @@ export const useUpdateGoodsReceipt = () => {
       queryClient.invalidateQueries({ queryKey: ['goodsReceipts'] });
       queryClient.invalidateQueries({ queryKey: ['purchaseOrders'] });
       queryClient.invalidateQueries({ queryKey: ['custodies'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.refetchQueries({ queryKey: ['products'] }); // Aggressively refetch immediately
       queryClient.invalidateQueries({ queryKey: ['dashboardStats'] });
     },
   });
@@ -206,6 +210,8 @@ export const useDeleteGoodsReceipt = () => {
       queryClient.invalidateQueries({ queryKey: ['goodsReceipts'] });
       queryClient.invalidateQueries({ queryKey: ['purchaseOrders'] });
       queryClient.invalidateQueries({ queryKey: ['custodies'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.refetchQueries({ queryKey: ['products'] }); // Aggressively refetch immediately
       queryClient.invalidateQueries({ queryKey: ['dashboardStats'] });
     },
   });
@@ -267,7 +273,7 @@ export const useProducts = (params = {}) => {
   return useQuery({
     queryKey: ['products', params],
     queryFn: () => purchasingApi.getProducts(params),
-    staleTime: 2 * 60 * 1000,
+    staleTime: 0, // Always consider stale, so invalidation triggers immediate refetch
   });
 };
 

@@ -382,6 +382,7 @@ export const purchasingApi = {
     const grns = getStoredData('goodsReceipts');
     const pos = getStoredData('purchaseOrders');
     const custodies = getStoredData('custodies');
+    const products = getStoredData('products');
     
     // Get the purchase order
     const po = pos.find((p) => p.id === grnData.poId);
@@ -427,6 +428,7 @@ export const purchasingApi = {
         custodyDeduction = {
           custodyId: custody.id,
           custodyNumber: custody.custodyNumber,
+          employeeId: custody.employeeId,
           employeeName: custody.employeeName,
           amountDeducted: totalReceivedAmount,
           remainingAfterDeduction: currentRemaining - totalReceivedAmount,
@@ -445,7 +447,8 @@ export const purchasingApi = {
       custodyDeduction, // Include custody deduction info
       receivingDate: grnData.receivingDate || new Date().toISOString().split('T')[0],
       items: receivedItems.map((item) => {
-        const poItem = po.items.find((pi) => pi.id === item.itemId);
+        // Find PO item by productId first (for items added from products), then by id (for manual entries)
+        const poItem = po.items.find((pi) => pi.productId === item.itemId || pi.id === item.itemId);
         return {
           ...item,
           price: poItem?.price || 0,
@@ -457,13 +460,24 @@ export const purchasingApi = {
     grns.push(newGRN);
     saveData('goodsReceipts', grns);
 
+    // Update product stock quantity based on received items
+    (grnData.items || []).forEach((item) => {
+      const productIndex = products.findIndex((p) => p.id === item.itemId);
+      if (productIndex === -1) return;
+
+      products[productIndex].quantity =
+        (Number(products[productIndex].quantity) || 0) + (Number(item.receivedQuantity) || 0);
+      products[productIndex].updatedAt = new Date().toISOString();
+    });
+    saveData('products', products);
+
     // Update PO received quantities and status
     if (grnData.poId) {
       const poIndex = pos.findIndex((p) => p.id === grnData.poId);
       if (poIndex !== -1) {
         // Update received quantities in PO items
         pos[poIndex].items = pos[poIndex].items.map((item) => {
-          const grnItem = receivedItems.find((gi) => gi.itemId === item.id);
+          const grnItem = receivedItems.find((gi) => gi.itemId === item.productId || gi.itemId === item.id);
           const prevReceived = item.receivedQuantity || 0;
           const newReceived = prevReceived + (grnItem?.receivedQuantity || 0);
           return {
@@ -494,6 +508,7 @@ export const purchasingApi = {
     const grns = getStoredData('goodsReceipts');
     const pos = getStoredData('purchaseOrders');
     const custodies = getStoredData('custodies');
+    const products = getStoredData('products');
     
     const grnIndex = grns.findIndex((g) => g.id === id);
     if (grnIndex === -1) {
@@ -513,7 +528,8 @@ export const purchasingApi = {
     const receivedItems = grnData.items || [];
     let newTotalReceivedAmount = 0;
     receivedItems.forEach((grnItem) => {
-      const poItem = po.items.find((item) => item.id === grnItem.itemId);
+      // Find PO item by productId first, then by id (for manual entries)
+      const poItem = po.items.find((item) => item.productId === grnItem.itemId || item.id === grnItem.itemId);
       if (poItem) {
         newTotalReceivedAmount += (grnItem.receivedQuantity || 0) * (poItem.price || 0);
       }
@@ -562,12 +578,37 @@ export const purchasingApi = {
         custodyDeduction = {
           custodyId: custody.id,
           custodyNumber: custody.custodyNumber,
+          employeeId: custody.employeeId,
           employeeName: custody.employeeName,
           amountDeducted: newTotalReceivedAmount,
           remainingAfterDeduction: finalRemaining,
         };
       }
     }
+
+    const oldReceivedByItem = {};
+    (oldGRN.items || []).forEach((item) => {
+      oldReceivedByItem[item.itemId] = (oldReceivedByItem[item.itemId] || 0) + (Number(item.receivedQuantity) || 0);
+    });
+
+    const newReceivedByItem = {};
+    (grnData.items || []).forEach((item) => {
+      newReceivedByItem[item.itemId] = (newReceivedByItem[item.itemId] || 0) + (Number(item.receivedQuantity) || 0);
+    });
+
+    Object.keys({ ...oldReceivedByItem, ...newReceivedByItem }).forEach((itemId) => {
+      const productIndex = products.findIndex((p) => p.id === itemId);
+      if (productIndex === -1) return;
+
+      const previousQty = Number(oldReceivedByItem[itemId]) || 0;
+      const nextQty = Number(newReceivedByItem[itemId]) || 0;
+      products[productIndex].quantity = Math.max(
+        0,
+        (Number(products[productIndex].quantity) || 0) - previousQty + nextQty
+      );
+      products[productIndex].updatedAt = new Date().toISOString();
+    });
+    saveData('products', products);
 
     // Update GRN
     grns[grnIndex] = {
@@ -579,7 +620,8 @@ export const purchasingApi = {
       custodyDeduction,
       receivingDate: grnData.receivingDate || oldGRN.receivingDate,
       items: receivedItems.map((item) => {
-        const poItem = po.items.find((pi) => pi.id === item.itemId);
+        // Find PO item by productId first, then by id
+        const poItem = po.items.find((pi) => pi.productId === item.itemId || pi.id === item.itemId);
         return {
           ...item,
           price: poItem?.price || 0,
@@ -608,7 +650,7 @@ export const purchasingApi = {
 
       pos[poIndex].items = pos[poIndex].items.map((item) => ({
         ...item,
-        receivedQuantity: receivedByItem[item.id] || 0,
+        receivedQuantity: receivedByItem[item.productId] || receivedByItem[item.id] || 0,
       }));
 
       const allItemsReceived = pos[poIndex].items.every(
@@ -635,6 +677,7 @@ export const purchasingApi = {
     const grns = getStoredData('goodsReceipts');
     const pos = getStoredData('purchaseOrders');
     const custodies = getStoredData('custodies');
+    const products = getStoredData('products');
     
     const grnIndex = grns.findIndex((g) => g.id === id);
     if (grnIndex === -1) {
@@ -643,6 +686,18 @@ export const purchasingApi = {
     
     const grn = grns[grnIndex];
     const deductedAmount = parseFloat(grn.totalReceivedAmount) || 0;
+
+    (grn.items || []).forEach((item) => {
+      const productIndex = products.findIndex((p) => p.id === item.itemId);
+      if (productIndex === -1) return;
+
+      products[productIndex].quantity = Math.max(
+        0,
+        (Number(products[productIndex].quantity) || 0) - (Number(item.receivedQuantity) || 0)
+      );
+      products[productIndex].updatedAt = new Date().toISOString();
+    });
+    saveData('products', products);
     
     // Return amount to custody if linked
     if (grn.custodyDeduction && grn.custodyDeduction.custodyId) {
@@ -683,7 +738,7 @@ export const purchasingApi = {
 
         pos[poIndex].items = pos[poIndex].items.map((item) => ({
           ...item,
-          receivedQuantity: receivedByItem[item.id] || 0,
+          receivedQuantity: receivedByItem[item.productId] || receivedByItem[item.id] || 0,
         }));
 
         const allItemsReceived = pos[poIndex].items.every(
@@ -844,6 +899,7 @@ export const purchasingApi = {
     const newProduct = {
       id: generateId('PROD'),
       ...productData,
+      quantity: Number(productData.quantity ?? 0) || 0,
       createdAt: new Date().toISOString(),
     };
     products.push(newProduct);
@@ -861,6 +917,7 @@ export const purchasingApi = {
     products[index] = {
       ...products[index],
       ...productData,
+      quantity: Number(productData.quantity ?? products[index].quantity ?? 0) || 0,
       updatedAt: new Date().toISOString(),
     };
     saveData('products', products);

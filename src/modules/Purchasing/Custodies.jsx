@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useCustodies,
@@ -34,6 +34,7 @@ export function Custodies() {
   const [custodyToClose, setCustodyToClose] = useState(null);
   const [custodyToDelete, setCustodyToDelete] = useState(null);
   const [viewingCustodyPurchases, setViewingCustodyPurchases] = useState(null);
+  const [selectedPrintPurchaseIds, setSelectedPrintPurchaseIds] = useState([]);
   const [toast, setToast] = useState(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [importFile, setImportFile] = useState(null);
@@ -376,7 +377,186 @@ export function Custodies() {
 
   const handleViewPurchases = (custody) => {
     setViewingCustodyPurchases(custody);
+    setSelectedPrintPurchaseIds([]);
     setIsPurchasesModalOpen(true);
+  };
+
+  useEffect(() => {
+    if (!isPurchasesModalOpen) {
+      setSelectedPrintPurchaseIds([]);
+    }
+  }, [isPurchasesModalOpen]);
+
+  const togglePrintPurchaseSelection = (poId) => {
+    setSelectedPrintPurchaseIds((prev) =>
+      prev.includes(poId) ? prev.filter((id) => id !== poId) : [...prev, poId]
+    );
+  };
+
+  const handlePrintSelectedPurchases = () => {
+    if (!viewingCustodyPurchases) return;
+
+    const selectedPurchases = custodyPurchases.purchaseOrders.filter((po) =>
+      selectedPrintPurchaseIds.includes(po.id)
+    );
+
+    if (!selectedPurchases.length) {
+      showToast('يرجى تحديد أمر شراء واحد على الأقل للطباعة', 'error');
+      return;
+    }
+
+    const printWindow = window.open('', '_blank', 'width=900,height=700');
+    if (!printWindow) {
+      showToast('تم حظر نافذة الطباعة من المتصفح، يرجى السماح بالنوافذ المنبثقة', 'error');
+      return;
+    }
+
+    const formattedDate = new Date().toLocaleDateString('ar-EG');
+    const selectedTotalAmount = selectedPurchases.reduce(
+      (sum, po) => sum + (parseFloat(po.totalAmount) || 0),
+      0
+    );
+    const remainingAfterSelection =
+      (parseFloat(viewingCustodyPurchases.remainingAmount ?? 0) ||
+        (parseFloat(viewingCustodyPurchases.amount || 0) || 0) -
+          (parseFloat(viewingCustodyPurchases.spentAmount || 0) || 0)) - selectedTotalAmount;
+
+    const purchaseRows = selectedPurchases
+      .map(
+        (po) => `
+          <div class="card">
+            <div class="row header-row">
+              <strong>${po.poNumber || '—'}</strong>
+              <span>${po.status === 'Completed' ? 'مكتمل' : po.status === 'Partially Received' ? 'مستلم جزئياً' : 'مفتوح'}</span>
+            </div>
+            <div class="row">
+              <span>المورد:</span>
+              <span>${po.supplierName || '—'}</span>
+            </div>
+            <div class="row">
+              <span>التاريخ:</span>
+              <span>${po.deliveryDate || '—'}</span>
+            </div>
+            <div class="row">
+              <span>إجمالي الأمر:</span>
+              <span>${parseFloat(po.totalAmount || 0).toFixed(2)} ج.م</span>
+            </div>
+            <div class="items-box">
+              <div class="items-title">العناصر</div>
+              ${
+                Array.isArray(po.items) && po.items.length
+                  ? po.items
+                      .map(
+                        (item) => `
+                          <div class="item-row">
+                            <span>${item.itemName || '—'}</span>
+                            <span>${parseFloat(item.quantity || 0).toFixed(2)} × ${parseFloat(item.price || 0).toFixed(2)} ج.م</span>
+                          </div>`
+                      )
+                      .join('')
+                  : '<div class="item-row"><span>لا توجد عناصر</span></div>'
+              }
+            </div>
+          </div>
+        `
+      )
+      .join('');
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <meta charset="UTF-8" />
+          <title>طباعة مشتريات العهدة</title>
+          <style>
+            body {
+              font-family: Tahoma, Arial, sans-serif;
+              direction: rtl;
+              color: #111827;
+              background: #fff;
+              padding: 24px;
+              margin: 0;
+            }
+            .title {
+              text-align: center;
+              margin-bottom: 18px;
+              font-size: 24px;
+              font-weight: bold;
+            }
+            .summary {
+              margin-bottom: 18px;
+              border: 1px solid #e5e7eb;
+              border-radius: 10px;
+              padding: 12px 16px;
+              background: #f8fafc;
+              line-height: 1.8;
+            }
+            .card {
+              border: 1px solid #e5e7eb;
+              border-radius: 10px;
+              padding: 14px 16px;
+              margin-bottom: 14px;
+              background: #fff;
+            }
+            .row {
+              display: flex;
+              justify-content: space-between;
+              gap: 12px;
+              margin-bottom: 8px;
+              font-size: 14px;
+            }
+            .header-row {
+              font-size: 16px;
+              padding-bottom: 8px;
+              border-bottom: 1px solid #e5e7eb;
+              margin-bottom: 10px;
+            }
+            .items-box {
+              margin-top: 12px;
+              background: #f9fafb;
+              border: 1px solid #e5e7eb;
+              border-radius: 8px;
+              padding: 10px 12px;
+            }
+            .items-title {
+              font-weight: 700;
+              margin-bottom: 8px;
+            }
+            .item-row {
+              display: flex;
+              justify-content: space-between;
+              gap: 12px;
+              font-size: 13px;
+              margin-bottom: 6px;
+            }
+            @media print {
+              body { padding: 0; }
+              .no-print { display: none; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="title">مشتريات العهدة</div>
+          <div class="summary">
+            <div><strong>العهدة:</strong> ${viewingCustodyPurchases.custodyNumber || '—'}</div>
+            <div><strong>الموظف:</strong> ${
+              viewingCustodyPurchases.employeeName ||
+              (viewingCustodyPurchases.employeeId && employees
+                ? employees.find((e) => e.id === viewingCustodyPurchases.employeeId)?.name ||
+                  viewingCustodyPurchases.employeeId
+                : viewingCustodyPurchases.employeeId || '-')
+            }</div>
+            <div><strong>تاريخ الطباعة:</strong> ${formattedDate}</div>
+            <div><strong>عدد أوامر الشراء المختارة:</strong> ${selectedPurchases.length}</div>
+            <div><strong>إجمالي قيمة المشتريات المحددة:</strong> ${selectedTotalAmount.toFixed(2)} ج.م</div>
+            
+          </div>
+          ${purchaseRows}
+        </body>
+      </html>
+    `);
+
+    printWindow.document.close();
+    setTimeout(() => printWindow.print(), 300);
   };
 
   const handleLinkPurchaseOrder = async () => {
@@ -435,6 +615,26 @@ export function Custodies() {
 
     return { purchaseOrders, goodsReceipts, totalPurchased, availablePOsToLink };
   }, [viewingCustodyPurchases, allPurchaseOrders?.data, allGoodsReceipts?.data]);
+
+  const selectedPrintPurchaseTotal = useMemo(() => {
+    if (!custodyPurchases.purchaseOrders.length) return 0;
+
+    return custodyPurchases.purchaseOrders
+      .filter((po) => selectedPrintPurchaseIds.includes(po.id))
+      .reduce((sum, po) => sum + (parseFloat(po.totalAmount) || 0), 0);
+  }, [custodyPurchases.purchaseOrders, selectedPrintPurchaseIds]);
+
+  const selectedPrintRemainingBalance = useMemo(() => {
+    if (!viewingCustodyPurchases) return 0;
+
+    const currentRemaining =
+      viewingCustodyPurchases.remainingAmount !== undefined
+        ? parseFloat(viewingCustodyPurchases.remainingAmount) || 0
+        : (parseFloat(viewingCustodyPurchases.amount) || 0) -
+          (parseFloat(viewingCustodyPurchases.spentAmount) || 0);
+
+    return currentRemaining - selectedPrintPurchaseTotal;
+  }, [selectedPrintPurchaseTotal, viewingCustodyPurchases]);
 
   // Calculate employee statistics
   const employeeStats = useMemo(() => {
@@ -1020,34 +1220,66 @@ export function Custodies() {
 
             {/* Purchase Orders */}
             <div>
-              <div className="flex justify-between items-center mb-3">
+              <div className="flex justify-between items-center mb-3 gap-3">
                 <h3 className="text-lg font-semibold text-gray-800">
                   أوامر الشراء ({custodyPurchases.purchaseOrders.length})
                 </h3>
-                {custodyPurchases.availablePOsToLink.length > 0 && (
-                  <div className="flex items-center gap-2">
-                    <select
-                      value={poToLinkId}
-                      onChange={(e) => setPoToLinkId(e.target.value)}
-                      className="px-3 py-1 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
-                    >
-                      <option value="">اختر أمر شراء لربطه بالعهدة</option>
-                      {custodyPurchases.availablePOsToLink.map((po) => (
-                        <option key={po.id} value={po.id}>
-                          {po.poNumber} - {po.supplierName} ({po.status === 'Open' ? 'مفتوح' : 'مستلم جزئياً'})
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={handleLinkPurchaseOrder}
-                      disabled={!poToLinkId || linkPOMutation.isPending}
-                      className="px-3 py-1 bg-sky-600 text-white rounded-lg text-sm hover:bg-sky-700 disabled:opacity-50"
-                    >
-                      {linkPOMutation.isPending ? 'جاري الربط...' : 'ربط'}
-                    </button>
-                  </div>
-                )}
+                <div className="flex items-center gap-2 flex-wrap justify-end">
+                  {custodyPurchases.purchaseOrders.length > 0 && (
+                    <>
+                      {/* <div className="ml-2 text-sm text-gray-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-1.5">
+                        <span className="font-medium">المحدد:</span>{' '}
+                        {selectedPrintPurchaseTotal.toFixed(2)} ج.م
+                        {' • '}
+                        <span className="font-medium">المتبقي:</span>{' '}
+                        {selectedPrintRemainingBalance.toFixed(2)} ج.م
+                      </div> */}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSelectedPrintPurchaseIds(
+                            custodyPurchases.purchaseOrders.map((po) => po.id)
+                          )
+                        }
+                        className="px-3 py-1 bg-gray-200 text-gray-800 rounded-lg text-sm hover:bg-gray-300"
+                      >
+                        تحديد الكل
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handlePrintSelectedPurchases}
+                        disabled={!selectedPrintPurchaseIds.length}
+                        className="px-3 py-1 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700 disabled:opacity-50"
+                      >
+                        طباعة المحدد
+                      </button>
+                    </>
+                  )}
+                  {custodyPurchases.availablePOsToLink.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={poToLinkId}
+                        onChange={(e) => setPoToLinkId(e.target.value)}
+                        className="px-3 py-1 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+                      >
+                        <option value="">اختر أمر شراء لربطه بالعهدة</option>
+                        {custodyPurchases.availablePOsToLink.map((po) => (
+                          <option key={po.id} value={po.id}>
+                            {po.poNumber} - {po.supplierName} ({po.status === 'Open' ? 'مفتوح' : 'مستلم جزئياً'})
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={handleLinkPurchaseOrder}
+                        disabled={!poToLinkId || linkPOMutation.isPending}
+                        className="px-3 py-1 bg-sky-600 text-white rounded-lg text-sm hover:bg-sky-700 disabled:opacity-50"
+                      >
+                        {linkPOMutation.isPending ? 'جاري الربط...' : 'ربط'}
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
               {custodyPurchases.purchaseOrders.length === 0 ? (
                 <p className="text-gray-500 text-sm">لا توجد أوامر شراء مرتبطة بهذه العهدة</p>
@@ -1058,13 +1290,21 @@ export function Custodies() {
                       key={po.id}
                       className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50"
                     >
-                      <div className="flex justify-between items-start mb-2">
-                        <div>
-                          <p className="font-medium text-gray-800">{po.poNumber}</p>
-                          <p className="text-sm text-gray-600">المورد: {po.supplierName}</p>
-                          <p className="text-sm text-gray-600">
-                            تاريخ التسليم: {po.deliveryDate}
-                          </p>
+                      <div className="flex justify-between items-start gap-3 mb-2">
+                        <div className="flex items-start gap-2">
+                          <input
+                            type="checkbox"
+                            checked={selectedPrintPurchaseIds.includes(po.id)}
+                            onChange={() => togglePrintPurchaseSelection(po.id)}
+                            className="mt-1 h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                          />
+                          <div>
+                            <p className="font-medium text-gray-800">{po.poNumber}</p>
+                            <p className="text-sm text-gray-600">المورد: {po.supplierName}</p>
+                            <p className="text-sm text-gray-600">
+                              التاريخ: {po.deliveryDate}
+                            </p>
+                          </div>
                         </div>
                         <div className="text-left">
                           <p className="font-medium text-gray-800">
@@ -1092,10 +1332,9 @@ export function Custodies() {
                         <ul className="list-disc list-inside text-sm text-gray-700 mt-1">
                           {po.items?.map((item, idx) => (
                             <li key={idx}>
-                              {item.itemName} - {item.quantity} × {item.price} ج.م
+                              {item.itemName} - {parseFloat(item.quantity || 0).toFixed(2)} × {parseFloat(item.price || 0).toFixed(2)} ج.م
                             </li>
                           ))}
-                         
                         </ul>
                       </div>
                     </div>
@@ -1157,7 +1396,7 @@ export function Custodies() {
                         <ul className="list-disc list-inside text-sm text-gray-700 mt-1">
                           {grn.items?.slice(0, 3).map((item, idx) => (
                             <li key={idx}>
-                              {item.itemName} - {item.receivedQuantity} قطعة
+                              {item.itemName} - {parseFloat(item.receivedQuantity || 0).toFixed(2)} قطعة
                             </li>
                           ))}
                           {grn.items?.length > 3 && (

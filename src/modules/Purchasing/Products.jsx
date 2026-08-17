@@ -41,6 +41,7 @@ export function Products() {
   const [formData, setFormData] = useState({
     name: '',
     category: '',
+    quantity: '0',
   });
 
   const [formErrors, setFormErrors] = useState({});
@@ -59,7 +60,7 @@ export function Products() {
   };
 
   const resetForm = () => {
-    setFormData({ name: '', category: '' });
+    setFormData({ name: '', category: '', quantity: '0' });
     setFormErrors({});
     setEditingProduct(null);
   };
@@ -74,6 +75,7 @@ export function Products() {
     setFormData({
       name: product.name || '',
       category: product.category || '',
+      quantity: String(product.quantity ?? 0),
     });
     setFormErrors({});
     setIsModalOpen(true);
@@ -84,14 +86,20 @@ export function Products() {
     if (!validateForm()) return;
 
     try {
+      const payload = {
+        name: formData.name,
+        category: formData.category,
+        quantity: Number(formData.quantity) || 0,
+      };
+
       if (editingProduct) {
         await updateMutation.mutateAsync({
           id: editingProduct.id,
-          data: formData,
+          data: payload,
         });
         showToast('تم تحديث المنتج بنجاح');
       } else {
-        await createMutation.mutateAsync(formData);
+        await createMutation.mutateAsync(payload);
         showToast('تم إضافة المنتج بنجاح');
       }
       setIsModalOpen(false);
@@ -201,6 +209,7 @@ export function Products() {
           id: `PROD-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
           name: productName,
           category: productCategory,
+          quantity: 0,
           createdAt: new Date().toISOString(),
         });
       }
@@ -269,6 +278,11 @@ export function Products() {
   const columns = [
     { key: 'name', label: 'اسم المنتج' },
     { key: 'category', label: 'الفئة' },
+    { 
+      key: 'quantity', 
+      label: 'الكمية',
+      render: (value) => `${Number(value || 0)} وحدة`
+    },
   ];
 
   return (
@@ -370,14 +384,18 @@ export function Products() {
               ) : (
                 data?.data?.map((row) => (
                   <tr key={row.id} className="hover:bg-gray-50">
-                    {columns.map((col) => (
-                      <td
-                        key={col.key}
-                        className="px-4 py-3 text-sm text-gray-800 whitespace-nowrap"
-                      >
-                        {row[col.key] || '-'}
-                      </td>
-                    ))}
+                    {columns.map((col) => {
+                      const value = row[col.key];
+                      const display = col.render ? col.render(value, row) : (value || '-');
+                      return (
+                        <td
+                          key={col.key}
+                          className="px-4 py-3 text-sm text-gray-800 whitespace-nowrap"
+                        >
+                          {display}
+                        </td>
+                      );
+                    })}
                     {(permissions.edit || permissions.delete || permissions.view) && (
                       <td className="px-4 py-3 text-sm text-gray-800 whitespace-nowrap">
                         <div className="flex gap-2 justify-start">
@@ -484,6 +502,19 @@ export function Products() {
             {formErrors.category && (
               <p className="mt-1 text-sm text-red-600">{formErrors.category}</p>
             )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              الكمية (وحدة)
+            </label>
+            <input
+              type="number"
+              min="0"
+              value={formData.quantity}
+              onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-sky-500"
+            />
           </div>
 
           <div className="flex gap-3 pt-4">
